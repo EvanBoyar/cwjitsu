@@ -113,7 +113,10 @@ object Morse {
             when {
                 upper in 'A'..'Z' -> nato[upper] ?: upper.toString()
                 upper in '0'..'9' -> nato[upper] ?: upper.toString()
-                ch == '/' -> "slash"
+                // "stroke" is the conventional ham-radio pronunciation
+                // for the "/" character used in callsign prefixes and
+                // suffixes (e.g. "W1/" is spoken "W one stroke").
+                ch == '/' -> "stroke"
                 else -> ch.toString()
             }
         }.joinToString(" ")

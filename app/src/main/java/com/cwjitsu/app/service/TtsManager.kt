@@ -128,6 +128,16 @@ class TtsManager(private val context: Context) {
             whenReady { speak(text, utteranceId, onDone) }
             return
         }
+        // Sanitize the caller-supplied prefix so it is safe to embed in
+        // the synthetic utterance-id. Some platform engines (notably
+        // Samsung's baked-in TTS, and several Google TTS builds on
+        // older Android) refuse to fire any progress callbacks when
+        // the utteranceId contains a `/` or other punctuation, which
+        // would silently dead-lock `SessionOrchestrator.awaitTts`. The
+        // UUID uniqueness guarantee does not depend on the prefix
+        // being intact, so we just replace any suspicious characters
+        // with an underscore.
+        val safePrefix = utteranceId.replace(Regex("[^A-Za-z0-9_-]"), "_")
         // Unique synthetic id so two consecutive identical user-facing
         // items (e.g. the same callsign back-to-back) get progress
         // events delivered independently — some engines merge progress
@@ -135,12 +145,29 @@ class TtsManager(private val context: Context) {
         // suffix is the actual uniqueness guarantee; the caller-supplied
         // id is kept purely as a debugging breadcrumb in case we ever
         // need to grep logs for which item triggered a deadlock.
-        val uniqueId = "$utteranceId\u00b7${java.util.UUID.randomUUID()}"
+        val uniqueId = "$safePrefix\u00b7${java.util.UUID.randomUUID()}"
         synchronized(this) {
             activeCallback = onDone
             activeId = uniqueId
         }
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, uniqueId)
+        // engine.speak() can return TextToSpeech.ERROR synchronously
+        // (for example if the engine language is missing for the
+        // supplied text, or the engine is mid-shutdown). When that
+        // happens the UtteranceProgressListener never fires any
+        // callback, so the captured continuation would suspend
+        // forever. Resolve the callback ourselves so the orchestrator
+        // progresses even in the synchronous-error case.
+        val status = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, uniqueId)
+        if (status == TextToSpeech.ERROR) {
+            synchronized(this) {
+                if (uniqueId == activeId) {
+                    val cb = activeCallback
+                    activeCallback = null
+                    activeId = null
+                    cb?.invoke(false)
+                }
+            }
+        }
     }
 
     fun stop() {
