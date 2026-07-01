@@ -28,6 +28,15 @@ object Morse {
     )
 
     /**
+     * Selectable character groups for the Characters practice category,
+     * in a stable, keyboard-friendly order. [specials] is everything in
+     * [characters] that isn't a letter or a digit (punctuation and symbols).
+     */
+    val letters: List<Char> = ('A'..'Z').toList()
+    val digits: List<Char> = ('0'..'9').toList()
+    val specials: List<Char> = characters.keys.filter { it !in letters && it !in digits }
+
+    /**
      * Prosigns are pairs of letters sent with no inter-character gap.
      */
     val prosigns: Map<String, String> = linkedMapOf(

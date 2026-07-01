@@ -30,6 +30,12 @@ data class MixedConfig(
     val textSource: String = "",
     val callsignRandomPrefix: Boolean = false,
     val callsignRandomSuffix: Boolean = false,
+    val characterSet: Set<Char> = DEFAULT_CHARACTER_SET,
+    // Sub-toggles for the combined Prosigns & Q-codes category. Both default
+    // on so selecting the category drills both, matching the old behavior of
+    // enabling the two separate categories.
+    val prosignsEnabled: Boolean = true,
+    val qcodesEnabled: Boolean = true,
 ) {
     companion object {
         /** Single source of truth for the default toggle set. */
@@ -40,6 +46,15 @@ data class MixedConfig(
 
         /** Default country selection: USA. */
         val DEFAULT_COUNTRIES: Set<String> = setOf("United States")
+
+        /**
+         * Which characters the Characters category draws from by default:
+         * the full letters + digits set (the previous hardcoded pool), with
+         * punctuation/symbols left off until the user opts in. An empty set
+         * is a valid choice and simply makes the category emit nothing.
+         */
+        val DEFAULT_CHARACTER_SET: Set<Char> =
+            (Morse.letters + Morse.digits).toSet()
     }
 }
 

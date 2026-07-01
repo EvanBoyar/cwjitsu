@@ -28,10 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.QuestionAnswer
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -49,6 +49,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -80,6 +81,7 @@ import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
+import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.service.ContentRegenerator
@@ -163,6 +165,20 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    fun updateCharacters(transform: (Set<Char>) -> Set<Char>) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(characterSet = transform(it.characterSet)) }
+        }
+    }
+
+    fun setProsignsEnabled(enabled: Boolean) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(prosignsEnabled = enabled) } }
+    }
+
+    fun setQcodesEnabled(enabled: Boolean) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(qcodesEnabled = enabled) } }
+    }
+
     fun setCallsignRandomSuffix(enabled: Boolean) {
         scope.launch {
             app.settings.updateMixedConfig { it.copy(callsignRandomSuffix = enabled) }
@@ -181,6 +197,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             textSource = current.textSource,
             callsignRandomPrefix = current.callsignRandomPrefix,
             callsignRandomSuffix = current.callsignRandomSuffix,
+            characterPool = current.characterSet,
+            prosignsEnabled = current.prosignsEnabled,
+            qcodesEnabled = current.qcodesEnabled,
         )
     }
 
@@ -309,37 +328,111 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 }
             }
 
-            // Per-category settings: prosign spoken answer (Literal vs Meaning) for PROSIGNS.
-            if (ContentKind.PROSIGNS in effectiveConfig.enabledKinds) {
+            // Per-category settings: which characters CHARACTERS draws from,
+            // chosen on a keyboard-style grid of toggle keys.
+            if (ContentKind.CHARACTERS in effectiveConfig.enabledKinds) {
+                CharacterPicker(
+                    selected = effectiveConfig.characterSet,
+                    onToggle = { ch ->
+                        updateCharacters { if (ch in it) it - ch else it + ch }
+                    },
+                    onSelectGroup = { group -> updateCharacters { it + group } },
+                    onClearGroup = { group -> updateCharacters { it - group } },
+                )
+            }
+
+            // Per-category settings for the combined Prosigns & Q-codes card:
+            // choose which of the two to drill, plus the prosign spoken-answer
+            // style (only relevant while prosigns are on).
+            if (ContentKind.PROSIGNS_QCODES in effectiveConfig.enabledKinds) {
                 Text(
-                    "Prosign spoken answer",
+                    "Prosigns & Q-codes",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    "How prosigns are read aloud.",
+                    "Pick which of the two this category sends.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = config.prosignSpokenMode == ProsignSpokenMode.LITERAL,
-                        onClick = {
-                            scope.launch {
-                                app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL))
-                            }
-                        },
-                        label = { Text("Literal (\"A S\")") },
-                    )
-                    FilterChip(
-                        selected = config.prosignSpokenMode == ProsignSpokenMode.MEANING,
-                        onClick = {
-                            scope.launch {
-                                app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.MEANING))
-                            }
-                        },
-                        label = { Text("Meaning (\"wait\")") },
+                if (!effectiveConfig.prosignsEnabled && !effectiveConfig.qcodesEnabled) {
+                    Text(
+                        "Both are off — this category will stay silent until you enable one.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Prosigns (AR, BT, SK...)",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Switch(
+                        checked = effectiveConfig.prosignsEnabled,
+                        onCheckedChange = { setProsignsEnabled(it) },
+                        colors = cwSwitchColors(),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Q-codes (QTH, QSL...)",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Switch(
+                        checked = effectiveConfig.qcodesEnabled,
+                        onCheckedChange = { setQcodesEnabled(it) },
+                        colors = cwSwitchColors(),
+                    )
+                }
+
+                // Prosign spoken-answer style, shown only while prosigns are on.
+                if (effectiveConfig.prosignsEnabled) {
+                    Text(
+                        "Prosign spoken answer",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = config.prosignSpokenMode == ProsignSpokenMode.LITERAL,
+                            onClick = {
+                                scope.launch {
+                                    app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL))
+                                }
+                            },
+                            label = { Text("Literal (\"A S\")") },
+                        )
+                        FilterChip(
+                            selected = config.prosignSpokenMode == ProsignSpokenMode.MEANING,
+                            onClick = {
+                                scope.launch {
+                                    app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.MEANING))
+                                }
+                            },
+                            label = { Text("Meaning (\"wait\")") },
+                        )
+                    }
+                }
+            }
+
+            // Per-category settings: News is a placeholder for now.
+            if (ContentKind.NEWS in effectiveConfig.enabledKinds) {
+                Text(
+                    "News",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "Coming soon: hear recent headlines in Morse from news sources you choose. Selecting this category has no effect yet.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
             }
 
             // Per-category settings: regions + /prefix + /suffix for CALLSIGNS.
@@ -607,6 +700,140 @@ private fun TextSourceField(
     )
 }
 
+/**
+ * Keyboard-style character selector for the Characters category. Numbers,
+ * letters (QWERTY), and punctuation/symbols each get a labeled section with
+ * All / None shortcuts and a grid of toggle keys. A lit (amber) key is
+ * included in practice; a hollow key is excluded.
+ */
+@Composable
+private fun CharacterPicker(
+    selected: Set<Char>,
+    onToggle: (Char) -> Unit,
+    onSelectGroup: (List<Char>) -> Unit,
+    onClearGroup: (List<Char>) -> Unit,
+) {
+    // A 10-wide grid; shorter rows are centered so letters keep the familiar
+    // staggered keyboard shape.
+    val columns = 10
+    val numberRow = ('1'..'9').toList() + '0'
+    val letterRows = listOf(
+        "QWERTYUIOP".toList(),
+        "ASDFGHJKL".toList(),
+        "ZXCVBNM".toList(),
+    )
+    val specialRows = Morse.specials.chunked(columns)
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Characters", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "Tap keys to choose what this category sends. ${selected.size} selected.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+        if (selected.isEmpty()) {
+            Text(
+                "No characters selected — this category will stay silent until you pick some.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        CharGroupHeader("Numbers", Morse.digits, selected, onSelectGroup, onClearGroup)
+        KeyRow(numberRow, columns, selected, onToggle)
+
+        CharGroupHeader("Letters", Morse.letters, selected, onSelectGroup, onClearGroup)
+        letterRows.forEach { KeyRow(it, columns, selected, onToggle) }
+
+        CharGroupHeader("Punctuation & symbols", Morse.specials, selected, onSelectGroup, onClearGroup)
+        specialRows.forEach { KeyRow(it, columns, selected, onToggle) }
+    }
+}
+
+@Composable
+private fun CharGroupHeader(
+    title: String,
+    group: List<Char>,
+    selected: Set<Char>,
+    onAll: (List<Char>) -> Unit,
+    onNone: (List<Char>) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { onAll(group) }, enabled = !group.all { it in selected }) {
+            Text("All")
+        }
+        TextButton(onClick = { onNone(group) }, enabled = group.any { it in selected }) {
+            Text("None")
+        }
+    }
+}
+
+/**
+ * One row of character keys laid out on a [columns]-wide grid. Rows with
+ * fewer than [columns] keys are centered with half-key padding so the
+ * layout keeps a keyboard-like stagger.
+ */
+@Composable
+private fun KeyRow(
+    chars: List<Char>,
+    columns: Int,
+    selected: Set<Char>,
+    onToggle: (Char) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val pad = (columns - chars.size) / 2f
+        if (pad > 0f) Spacer(Modifier.weight(pad))
+        chars.forEach { ch ->
+            CharKey(
+                label = ch.toString(),
+                selected = ch in selected,
+                onClick = { onToggle(ch) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (pad > 0f) Spacer(Modifier.weight(pad))
+    }
+}
+
+@Composable
+private fun CharKey(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(44.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surface,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary
+                       else MaterialTheme.colorScheme.onSurface,
+        border = if (selected) null
+                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
 @Composable
 private fun PreviewPane(
     nowPlaying: SessionOrchestrator.NowPlaying,
@@ -816,27 +1043,27 @@ private fun CountryManagerDialog(
 
 private fun ContentKind.label(): String = when (this) {
     ContentKind.CHARACTERS -> "Characters"
-    ContentKind.PROSIGNS -> "Prosigns"
-    ContentKind.QCODES -> "Q-codes"
+    ContentKind.PROSIGNS_QCODES -> "Prosigns & Q-codes"
     ContentKind.WORDS -> "Words"
     ContentKind.TEXT -> "Text"
     ContentKind.CALLSIGNS -> "Call Signs"
+    ContentKind.NEWS -> "News"
 }
 
 private fun ContentKind.icon(): ImageVector = when (this) {
     ContentKind.CHARACTERS -> Icons.Filled.TextFields
-    ContentKind.PROSIGNS -> Icons.AutoMirrored.Filled.MergeType
-    ContentKind.QCODES -> Icons.Filled.QuestionAnswer
+    ContentKind.PROSIGNS_QCODES -> Icons.Filled.QuestionAnswer
     ContentKind.WORDS -> Icons.Filled.Translate
     ContentKind.TEXT -> Icons.AutoMirrored.Filled.Article
     ContentKind.CALLSIGNS -> Icons.Filled.SettingsInputAntenna
+    ContentKind.NEWS -> Icons.Filled.Newspaper
 }
 
 private fun ContentKind.subtitle(): String = when (this) {
     ContentKind.CHARACTERS -> "A-Z, 0-9"
-    ContentKind.PROSIGNS -> "AR, BT, SK..."
-    ContentKind.QCODES -> "QTH, QSL..."
+    ContentKind.PROSIGNS_QCODES -> "AR, QSL..."
     ContentKind.WORDS -> "English"
     ContentKind.TEXT -> "Your text"
     ContentKind.CALLSIGNS -> "By country"
+    ContentKind.NEWS -> "Headlines"
 }

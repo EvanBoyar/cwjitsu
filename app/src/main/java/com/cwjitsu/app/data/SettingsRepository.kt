@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.MixedConfig
+import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
@@ -169,17 +170,32 @@ class SettingsRepository(private val context: Context) {
         // split toggle — see the parse side for the migration logic.
         o.put("callsignRandomPrefix", config.callsignRandomPrefix)
         o.put("callsignRandomSuffix", config.callsignRandomSuffix)
+        // Selected characters for the Characters category, stored as a plain
+        // string in canonical Morse order so the saved value is stable.
+        val chars = Morse.characters.keys
+            .filter { it in config.characterSet }
+            .joinToString("")
+        o.put("characterSet", chars)
+        // Sub-toggles for the combined Prosigns & Q-codes category.
+        o.put("prosignsEnabled", config.prosignsEnabled)
+        o.put("qcodesEnabled", config.qcodesEnabled)
         return o.toString()
     }
 
     private fun parseMixedConfig(json: String): MixedConfig {
         val o = JSONObject(json)
         val kindsArr = o.optJSONArray("enabledKinds") ?: JSONArray()
-        val kinds = (0 until kindsArr.length())
-            .mapNotNull { i ->
-                runCatching { ContentKind.valueOf(kindsArr.getString(i)) }.getOrNull()
-            }
-            .toSet()
+        val rawKindNames = (0 until kindsArr.length()).map { kindsArr.optString(it) }
+        // Legacy migration: PROSIGNS and QCODES used to be two separate
+        // categories. They are now one combined PROSIGNS_QCODES card with
+        // per-side sub-toggles, so map either legacy name onto the combined
+        // kind (and, below, seed the sub-toggles from which ones were on).
+        val hasLegacyProsigns = "PROSIGNS" in rawKindNames
+        val hasLegacyQcodes = "QCODES" in rawKindNames
+        val kinds = rawKindNames
+            .mapNotNull { runCatching { ContentKind.valueOf(it) }.getOrNull() }
+            .toMutableSet()
+        if (hasLegacyProsigns || hasLegacyQcodes) kinds.add(ContentKind.PROSIGNS_QCODES)
         val countriesArr = o.optJSONArray("callsignCountries") ?: JSONArray()
         val countries = (0 until countriesArr.length())
             .mapNotNull { i -> countriesArr.optString(i).takeIf { it.isNotEmpty() } }
@@ -196,6 +212,28 @@ class SettingsRepository(private val context: Context) {
         val legacy = if (!hasNewPrefix && !hasNewSuffix) {
             o.optBoolean("callsignRandomDecoration", false)
         } else false
+        // Characters: absent key means a config saved before this feature —
+        // fall back to the default (letters + digits) so existing users keep
+        // the previous behavior. A present-but-empty string is honored as a
+        // deliberate "no characters" choice.
+        val characterSet = if (o.has("characterSet")) {
+            o.optString("characterSet").toSet()
+        } else {
+            MixedConfig.DEFAULT_CHARACTER_SET
+        }
+        // Prosigns/Q-codes sub-toggles. When the new keys are absent, seed
+        // from the legacy category names if present (so a user who had only
+        // Q-codes keeps only Q-codes), otherwise default both on.
+        val prosignsEnabled = when {
+            o.has("prosignsEnabled") -> o.optBoolean("prosignsEnabled", true)
+            hasLegacyProsigns || hasLegacyQcodes -> hasLegacyProsigns
+            else -> true
+        }
+        val qcodesEnabled = when {
+            o.has("qcodesEnabled") -> o.optBoolean("qcodesEnabled", true)
+            hasLegacyProsigns || hasLegacyQcodes -> hasLegacyQcodes
+            else -> true
+        }
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -210,6 +248,9 @@ class SettingsRepository(private val context: Context) {
             callsignRandomSuffix = if (hasNewSuffix)
                 o.optBoolean("callsignRandomSuffix", false)
             else legacy,
+            characterSet = characterSet,
+            prosignsEnabled = prosignsEnabled,
+            qcodesEnabled = qcodesEnabled,
         )
     }
 }

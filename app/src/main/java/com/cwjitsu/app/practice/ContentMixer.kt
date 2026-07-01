@@ -22,6 +22,9 @@ object ContentMixer {
         textSource: String = "",
         callsignRandomPrefix: Boolean = false,
         callsignRandomSuffix: Boolean = false,
+        characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
+        prosignsEnabled: Boolean = true,
+        qcodesEnabled: Boolean = true,
     ): List<ContentItem> {
         if (enabledKinds.isEmpty()) return emptyList()
         val out = mutableListOf<ContentItem>()
@@ -31,15 +34,24 @@ object ContentMixer {
         for (kind in ContentKind.entries) {
             if (kind !in enabledKinds) continue
             when (kind) {
-                ContentKind.CHARACTERS -> out.addAll(
-                    CharacterContentGenerator().batch(1, nato)
-                )
-                ContentKind.PROSIGNS -> out.addAll(
-                    ProsignContentGenerator(spokenMode = prosignMode).batch(1)
-                )
-                ContentKind.QCODES -> out.addAll(
-                    QCodeContentGenerator().batch(1, nato)
-                )
+                ContentKind.CHARACTERS -> {
+                    // Draw from the user's selected characters, in canonical
+                    // Morse order. An empty selection emits nothing.
+                    val pool = Morse.characters.keys.filter { it in characterPool }
+                    if (pool.isNotEmpty()) {
+                        out.addAll(CharacterContentGenerator(pool = pool).batch(1, nato))
+                    }
+                }
+                ContentKind.PROSIGNS_QCODES -> {
+                    // One combined category; emit a prosign and/or a Q-code
+                    // depending on the sub-toggles. Both off emits nothing.
+                    if (prosignsEnabled) {
+                        out.addAll(ProsignContentGenerator(spokenMode = prosignMode).batch(1))
+                    }
+                    if (qcodesEnabled) {
+                        out.addAll(QCodeContentGenerator().batch(1, nato))
+                    }
+                }
                 ContentKind.WORDS -> out.addAll(WordContentGenerator(words).batch(1))
                 ContentKind.TEXT -> {
                     if (textSource.isNotBlank()) {
@@ -76,6 +88,10 @@ object ContentMixer {
                             }
                         )
                     }
+                }
+                ContentKind.NEWS -> {
+                    // Placeholder: news headlines from user-selected sources
+                    // will be emitted here in a future release.
                 }
             }
         }

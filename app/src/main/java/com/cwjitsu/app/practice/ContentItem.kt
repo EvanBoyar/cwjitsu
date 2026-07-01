@@ -5,11 +5,16 @@ package com.cwjitsu.app.practice
  */
 enum class ContentKind {
     CHARACTERS,
-    PROSIGNS,
-    QCODES,
+    // Prosigns and Q-codes share one category card; which of the two are
+    // actually emitted is controlled by MixedConfig.prosignsEnabled /
+    // qcodesEnabled when this kind is selected.
+    PROSIGNS_QCODES,
     WORDS,
     TEXT,
     CALLSIGNS,
+    // Placeholder for a future feature: spoken news headlines from
+    // user-selected sources. Currently emits nothing.
+    NEWS,
 }
 
 /**
