@@ -164,11 +164,11 @@ class SettingsRepository(private val context: Context) {
         }
         o.put("callsignCountries", countries)
         o.put("textSource", config.textSource)
-        // The optional '/' prefix and suffix for generated callsigns.
-        // An empty string is the on-disk representation of "no decoration"
-        // and round-trips to `null` in [MixedConfig]. Older saved configs
-        // predate these keys, so we always write them explicitly.
-        o.put("callsignRandomDecoration", config.callsignRandomDecoration)
+        // Independent toggles for occasional host-country /prefix and
+        // portable-status /suffix. Older saved configs predate the
+        // split toggle — see the parse side for the migration logic.
+        o.put("callsignRandomPrefix", config.callsignRandomPrefix)
+        o.put("callsignRandomSuffix", config.callsignRandomSuffix)
         return o.toString()
     }
 
@@ -185,6 +185,17 @@ class SettingsRepository(private val context: Context) {
             .mapNotNull { i -> countriesArr.optString(i).takeIf { it.isNotEmpty() } }
             .toSet()
         val text = o.optString("textSource")
+        // Migration: a previous "combined" toggle stored decoration
+        // choices under the single key `callsignRandomDecoration`.
+        // If BOTH new per-side keys are absent, fall back to the
+        // legacy value so users who toggled the old switch still see
+        // decoration after the upgrade. As soon as the user touches
+        // either new toggle, the legacy value is no longer read.
+        val hasNewPrefix = o.has("callsignRandomPrefix")
+        val hasNewSuffix = o.has("callsignRandomSuffix")
+        val legacy = if (!hasNewPrefix && !hasNewSuffix) {
+            o.optBoolean("callsignRandomDecoration", false)
+        } else false
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -193,12 +204,12 @@ class SettingsRepository(private val context: Context) {
             enabledKinds = kinds,
             callsignCountries = countries,
             textSource = text,
-            // Schema change from a previous (now-removed) prefix/suffix
-            // string pair to a single random-decoration toggle. Old
-            // saved prefs are read cleanly — optBoolean returns its
-            // second argument as the fallback when the key is absent,
-            // so existing users default to "off" here.
-            callsignRandomDecoration = o.optBoolean("callsignRandomDecoration", false),
+            callsignRandomPrefix = if (hasNewPrefix)
+                o.optBoolean("callsignRandomPrefix", false)
+            else legacy,
+            callsignRandomSuffix = if (hasNewSuffix)
+                o.optBoolean("callsignRandomSuffix", false)
+            else legacy,
         )
     }
 }

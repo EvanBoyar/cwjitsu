@@ -12,6 +12,41 @@ import java.util.Locale
  * fires when the engine finishes (or fails). [speak] is a no-op (and immediately
  * invokes [onDone] with `false`) until the engine is ready, but it WILL eventually
  * fire even if the engine never reports ready so the orchestrator never hangs.
+ *
+ * # Listener ownership
+ *
+ * A single global [UtteranceProgressListener] is installed exactly once during
+ * [init]. It dispatches the engine's callback to whatever continuation is
+ * currently registered as [activeCallback]. Earlier versions installed a fresh
+ * listener on every [speak] call; that combined with [TextToSpeech.QUEUE_FLUSH]
+ * produced a deadlock where the listener installed for utterance N was
+ * overwritten before N's [onDone] fired, so the [cont.resume] closure captured
+ * for N never got called. The orchestrator would then hang in
+ * `SessionOrchestrator.awaitTts` for the lifetime of the practice session —
+ * no answer would be spoken, and the courtesy-tone that runs *after* the
+ * per-item awaitTts would never be reached.
+ *
+ * # Utterance-id uniqueness
+ *
+ * Each [speak] call generates a synthetic utterance-id by appending a
+ * monotonic suffix to the caller-provided id. Two consecutive items can
+ * legitimately produce identical user-facing text (e.g. the same callsign
+ * back-to-back); the platform engine on some devices will merge progress
+ * events across identical ids and only fire [onDone] once, which would
+ * otherwise deadlock the second item.
+ *
+ * # Boundary-character splitting
+ *
+ * Some platform engines split an utterance on boundary characters such as `/`
+ * and fire [onDone] per chunk, all with the same utteranceId. The active-id
+ * check in the listener guarantees we only resolve the actively-awaited
+ * utterance and ignore partial / late callbacks.
+ *
+ * # Cancellation / stop
+ *
+ * [stop] and [release] drain the active callback with `ok = false` so an
+ * orchestrator coroutine awaiting this utterance is released instead of
+ * hanging indefinitely.
  */
 class TtsManager(private val context: Context) {
 
@@ -19,6 +54,13 @@ class TtsManager(private val context: Context) {
     @Volatile private var ready: Boolean = false
     @Volatile private var initFailed: Boolean = false
     private val pendingCallbacks = mutableListOf<() -> Unit>()
+
+    // The currently-awaited utterance: the listener routes every callback
+    // through [resolveIfActive], which fires the captured continuation only
+    // when the engine-supplied utteranceId matches [activeId]. Stale
+    // callbacks from prior / split utterances fall on the floor harmlessly.
+    private var activeId: String? = null
+    private var activeCallback: ((Boolean) -> Unit)? = null
 
     @Synchronized
     fun init() {
@@ -28,6 +70,34 @@ class TtsManager(private val context: Context) {
                 if (status == TextToSpeech.SUCCESS) {
                     ready = true
                     tts?.language = Locale.US
+                    // Install the listener EXACTLY once. Earlier versions
+                    // installed a fresh listener inside speak(); that made
+                    // every queued continuation race against the listener
+                    // for the *next* utterance, eventually orphaning
+                    // callback closures and deadlocking the orchestrator.
+                    tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {}
+                        override fun onDone(utteranceId: String?) {
+                            resolveIfActive(utteranceId, ok = true)
+                        }
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(utteranceId: String?) {
+                            resolveIfActive(utteranceId, ok = false)
+                        }
+                        override fun onError(utteranceId: String?, errorCode: Int) {
+                            resolveIfActive(utteranceId, ok = false)
+                        }
+                        private fun resolveIfActive(id: String?, ok: Boolean) {
+                            synchronized(this@TtsManager) {
+                                if (id == activeId) {
+                                    val cb = activeCallback
+                                    activeCallback = null
+                                    activeId = null
+                                    cb?.invoke(ok)
+                                }
+                            }
+                        }
+                    })
                     val drain = pendingCallbacks.toList()
                     pendingCallbacks.clear()
                     drain.forEach { it() }
@@ -58,21 +128,38 @@ class TtsManager(private val context: Context) {
             whenReady { speak(text, utteranceId, onDone) }
             return
         }
-        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { onDone(true) }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) { onDone(false) }
-            override fun onError(utteranceId: String?, errorCode: Int) { onDone(false) }
-        })
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        // Unique synthetic id so two consecutive identical user-facing
+        // items (e.g. the same callsign back-to-back) get progress
+        // events delivered independently — some engines merge progress
+        // across identical ids and only fire onDone once. The UUID
+        // suffix is the actual uniqueness guarantee; the caller-supplied
+        // id is kept purely as a debugging breadcrumb in case we ever
+        // need to grep logs for which item triggered a deadlock.
+        val uniqueId = "$utteranceId\u00b7${java.util.UUID.randomUUID()}"
+        synchronized(this) {
+            activeCallback = onDone
+            activeId = uniqueId
+        }
+        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, uniqueId)
     }
 
     fun stop() {
+        // Drain any in-flight callback so a coroutine awaiting this
+        // utterance is released (with ok=false) rather than hanging.
+        synchronized(this) {
+            val cb = activeCallback
+            activeCallback = null
+            activeId = null
+            cb?.invoke(false)
+        }
         tts?.stop()
     }
 
     fun release() {
+        synchronized(this) {
+            activeCallback = null
+            activeId = null
+        }
         tts?.stop()
         tts?.shutdown()
         tts = null

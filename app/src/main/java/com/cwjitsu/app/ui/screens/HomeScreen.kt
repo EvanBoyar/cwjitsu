@@ -43,16 +43,12 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -161,9 +157,15 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
-    fun setCallsignRandomDecoration(enabled: Boolean) {
+    fun setCallsignRandomPrefix(enabled: Boolean) {
         scope.launch {
-            app.settings.updateMixedConfig { it.copy(callsignRandomDecoration = enabled) }
+            app.settings.updateMixedConfig { it.copy(callsignRandomPrefix = enabled) }
+        }
+    }
+
+    fun setCallsignRandomSuffix(enabled: Boolean) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(callsignRandomSuffix = enabled) }
         }
     }
 
@@ -177,7 +179,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
             textSource = current.textSource,
-            callsignRandomDecoration = current.callsignRandomDecoration,
+            callsignRandomPrefix = current.callsignRandomPrefix,
+            callsignRandomSuffix = current.callsignRandomSuffix,
         )
     }
 
@@ -380,12 +383,13 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     )
                 }
 
-                // Decoration is now a single toggle: when on, each emitted
-                // callsign is independently rolled for an optional /prefix
-                // and /suffix — biased toward "neither" so the listener
-                // hears mostly plain callsigns. Replaces the previous
-                // /prefix and /suffix dropdowns, which forced the user to
-                // pick a single value applied to every callsign.
+                // Decoration is two separate toggles so the user can pick
+                // exactly which side is occasionally present. Each side
+                // is independently rolled at 25% when its toggle is on —
+                // the listener hears mostly plain callsigns with the
+                // toggled side appearing occasionally. Replaces the
+                // previous combined toggle (and the /prefix + /suffix
+                // dropdowns before that).
                 //
                 // Inlined here (rather than reusing ToggleRow from
                 // ConfigPanel) so HomeScreen stays self-contained and does
@@ -396,17 +400,37 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Random /prefix or /suffix (occasionally)",
+                        "Random /prefix (occasionally)",
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Switch(
-                        checked = effectiveConfig.callsignRandomDecoration,
-                        onCheckedChange = { setCallsignRandomDecoration(it) },
+                        checked = effectiveConfig.callsignRandomPrefix,
+                        onCheckedChange = { setCallsignRandomPrefix(it) },
                     )
                 }
                 Text(
-                    "When on, most callsigns stay plain, but the generator occasionally adds a /prefix (host indicator), a /suffix (portable status), or rarely both.",
+                    "Adds a host-country /prefix (such as W1/, VE3/, JA/) to a random quarter of generated callsigns. Off = no prefix is added.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Random /suffix (occasionally)",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Switch(
+                        checked = effectiveConfig.callsignRandomSuffix,
+                        onCheckedChange = { setCallsignRandomSuffix(it) },
+                    )
+                }
+                Text(
+                    "Adds a portable-status /suffix (such as /M, /P, /QRP) to a random quarter of generated callsigns. Off = no suffix is added.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = 4.dp),
@@ -594,57 +618,6 @@ private fun PreviewPane(items: List<ContentItem>) {
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     )
                 }
-            }
-        }
-    }
-}
-
-/**
- * Read-only dropdown used to pick a '/' prefix or suffix option for
- * generated callsigns. The first option is always `null` (rendered as
- * "None") which means "do not add this decoration".
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CallsignFormatDropdown(
-    label: String,
-    options: List<String?>,
-    selected: String?,
-    optionLabel: (String?) -> String,
-    onSelected: (String?) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = modifier,
-    ) {
-        OutlinedTextField(
-            value = optionLabel(selected),
-            onValueChange = {},
-            readOnly = true,
-            singleLine = true,
-            label = { Text(label) },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-            },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
-                .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            for (option in options) {
-                DropdownMenuItem(
-                    text = { Text(optionLabel(option)) },
-                    onClick = {
-                        onSelected(option)
-                        expanded = false
-                    },
-                )
             }
         }
     }

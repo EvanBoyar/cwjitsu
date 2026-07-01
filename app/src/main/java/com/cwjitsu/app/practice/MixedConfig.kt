@@ -13,19 +13,23 @@ package com.cwjitsu.app.practice
  *
  * [textSource] is the user's free-text input used when TEXT is enabled.
  *
- * [callsignRandomDecoration] when true, each generated callsign is
- * independently rolled for an optional '/' prefix and '/' suffix. The
- * roll is biased toward "no decoration" — on average the listener hears
- * a plain callsign most of the time, occasionally a host-country
- * "/prefix", occasionally a portable-status "/suffix", and rarely both.
- * Mirrors what you'd hear on the air where every other operator is
- * running portable from somewhere else.
+ * [callsignRandomPrefix] when true, each generated callsign is independently
+ * rolled for an optional host-country '/' prefix (e.g. "W1/").
+ *
+ * [callsignRandomSuffix] when true, each generated callsign is independently
+ * rolled for an optional portable-status '/' suffix (e.g. "/M").
+ *
+ * Each side is rolled independently at 25% so the listener hears mostly plain
+ * callsigns (~56%) with occasional decoration on either side. Mirrors what
+ * you'd hear on the air where every other operator is running portable from
+ * somewhere else.
  */
 data class MixedConfig(
     val enabledKinds: Set<ContentKind> = DEFAULT_KINDS,
     val callsignCountries: Set<String> = DEFAULT_COUNTRIES,
     val textSource: String = "",
-    val callsignRandomDecoration: Boolean = false,
+    val callsignRandomPrefix: Boolean = false,
+    val callsignRandomSuffix: Boolean = false,
 ) {
     companion object {
         /** Single source of truth for the default toggle set. */
@@ -62,11 +66,3 @@ val CALLSIGN_SUFFIX_OPTIONS: List<String?> = listOf(
     null,
     "/P", "/M", "/MM", "/AM", "/QRP", "/A",
 )
-
-/** Human-readable label for a prefix option (used by the UI). */
-fun formatCallsignPrefixLabel(value: String?): String =
-    if (value.isNullOrEmpty()) "None" else value
-
-/** Human-readable label for a suffix option (used by the UI). */
-fun formatCallsignSuffixLabel(value: String?): String =
-    if (value.isNullOrEmpty()) "None" else value
