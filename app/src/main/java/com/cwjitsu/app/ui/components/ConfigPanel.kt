@@ -84,14 +84,17 @@ fun ConfigPanel(
         // Shown as a repeat count: 0 means "sent once, not repeated". The
         // stored `repetitions` is the play count (always >= 1), so the slider
         // maps display = plays - 1 and stores value + 1. This keeps existing
-        // behaviour unchanged while letting the setting bottom out at 0.
+        // behaviour unchanged while letting the setting bottom out at 0. At 0
+        // it greys out (like Farnsworth) to signal "no repetition", but stays
+        // draggable so the user can turn it back up.
         LabeledSlider(
             label = "Repetitions",
             value = (config.repetitions - 1).toFloat(),
-            valueRange = 0f..19f,
-            steps = 18,
+            valueRange = 0f..5f,
+            steps = 4,
             valueLabel = "${config.repetitions - 1}",
             onValueChange = { onConfigChange(config.copy(repetitions = it.toInt() + 1)) },
+            dimmed = config.repetitions - 1 == 0,
         )
 
         LabeledSlider(
@@ -221,21 +224,30 @@ private fun LabeledSlider(
     valueLabel: String,
     onValueChange: (Float) -> Unit,
     enabled: Boolean = true,
+    // Greyed appearance while STILL interactive (unlike [enabled] = false).
+    // Used to signal an "off" value the user can still drag away from, e.g.
+    // Repetitions at 0.
+    dimmed: Boolean = false,
 ) {
+    val greyed = !enabled || dimmed
+    val labelColor = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                     else MaterialTheme.colorScheme.onSurface
+    val thumb = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                else MaterialTheme.colorScheme.primary
+    val track = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+                else MaterialTheme.colorScheme.primary
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
-                color = if (enabled) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                color = labelColor,
             )
             Text(
                 valueLabel,
                 style = MaterialTheme.typography.labelLarge,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                color = labelColor,
             )
         }
         Slider(
@@ -245,8 +257,8 @@ private fun LabeledSlider(
             steps = steps,
             enabled = enabled,
             colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.primary,
-                activeTrackColor = MaterialTheme.colorScheme.primary,
+                thumbColor = thumb,
+                activeTrackColor = track,
                 disabledThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                 disabledActiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
             ),

@@ -13,8 +13,17 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Drives an [AudioTrack] that mixes a [Schedule]'s tone events plus background noise,
- * real-time, into PCM 16-bit output.
+ * Drives an [AudioTrack] that mixes a [Schedule]'s tone events plus background
+ * noise, real-time, into PCM 16-bit output.
+ *
+ * Keep-warm model: a single AudioTrack and a single worker thread stay alive
+ * for the whole session. The worker streams the active schedule's tones and
+ * fills the gaps between schedules with silence, so the track never stops.
+ * This matters because Android's AudioFlinger swallows the first few tens of
+ * milliseconds of a *freshly created* track while it spins up — which used to
+ * make the very short courtesy pip vanish intermittently. On a warm track
+ * there is no cold start, so every sound (long code or short pip) is heard in
+ * full, with no sacrificial-silence guesswork.
  */
 class CwAudioEngine(
     val sampleRate: Int = 44_100,
@@ -26,91 +35,113 @@ class CwAudioEngine(
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state
 
-    private var audioTrack: AudioTrack? = null
-    private var workerThread: Thread? = null
-    private var schedule: Schedule? = null
-    private var config: PracticeConfig = PracticeConfig()
-    private var noise: NoiseGenerator = NoiseGenerator(NoiseType.NONE)
     private val envelope = Envelope(sampleRate)
+    private val silencePcm = ShortArray(blockSize)  // reused zero buffer
 
     companion object {
         private const val TAG = "CWJitsu/Audio"
+        // Silence blocks written when a session's track is first created, to
+        // absorb the one-time AudioFlinger cold-start before real tones play.
+        private const val PREROLL_BLOCKS = 6
     }
 
-    @Volatile private var writePos: Long = 0L
-    @Volatile private var samplesWritten: Long = 0L
-    @Volatile private var running: Boolean = false
+    // Session-level track + worker. Guarded by [lock] for lifecycle.
+    private val lock = Any()
+    private var track: AudioTrack? = null
+    private var worker: Thread? = null
+    @Volatile private var sessionRunning = false
 
+    // Active render state, guarded by [lock].
+    private var curSchedule: Schedule? = null
+    private var curConfig: PracticeConfig = PracticeConfig()
+    private var curNoise: NoiseGenerator = NoiseGenerator(NoiseType.NONE)
+    private var playPos: Long = 0L
+
+    @Volatile private var samplesElapsed: Long = 0L
+
+    /** Install the schedule to be played by the next [play] call. */
     fun setSchedule(schedule: Schedule, config: PracticeConfig) {
-        stopInternal()
-        this.schedule = schedule
-        this.config = config
-        this.noise = NoiseGenerator(config.noiseType)
+        synchronized(lock) {
+            curSchedule = schedule
+            curConfig = config
+            curNoise = NoiseGenerator(config.noiseType)
+            playPos = 0L
+            samplesElapsed = 0L
+        }
     }
 
+    /** Start playing the installed schedule on the warm session track. */
     fun play() {
-        val sched = schedule ?: return
-        if (_state.value == State.PLAYING) {
-            // Defensive: stopInternal should already have left us in
-            // State.STOPPED, but if a previous worker is still mid-
-            // `track.write()` (e.g. an oversized block or a slow device),
-            // force-stop here so we never silently skip starting the
-            // new playback. Without this guard the courtesy-pip was the
-            // most common casualty because the post-batch play() was
-            // racing with a still-dying worker.
-            Log.w(TAG, "play: stale PLAYING state, force-stopping before new playback")
-            stopInternal()
+        synchronized(lock) {
+            if (curSchedule == null) return
+            playPos = 0L
+            samplesElapsed = 0L
+            ensureSessionStartedLocked()
+            _state.value = State.PLAYING
         }
-
-        val track = ensureTrack()
-        track.play()
-        _state.value = State.PLAYING
-        running = true
-        writePos = 0L
-        samplesWritten = 0L
-        // Assign the worker field BEFORE start() so that pumpTo's
-        // thread-identity check (see end of pumpTo) can immediately tell
-        // whether it is still the current worker when its loop ends.
-        val worker = Thread({ pumpTo(track, sched) }, "CW-AudioEngine").also {
-            it.isDaemon = true
-        }
-        workerThread = worker
-        worker.start()
     }
 
     fun pause() {
-        if (_state.value != State.PLAYING) return
-        audioTrack?.pause()
-        _state.value = State.PAUSED
+        if (_state.value == State.PLAYING) _state.value = State.PAUSED
     }
 
     fun resume() {
-        if (_state.value != State.PAUSED) return
-        audioTrack?.play()
-        _state.value = State.PLAYING
+        if (_state.value == State.PAUSED) _state.value = State.PLAYING
     }
 
-    fun stop() {
-        stopInternal()
+    /**
+     * Abandon the current schedule but keep the session track warm. Used to
+     * skip an item without paying a cold-start on the next one.
+     */
+    fun abort() {
+        synchronized(lock) {
+            curSchedule = null
+            playPos = 0L
+            samplesElapsed = 0L
+        }
         _state.value = State.STOPPED
     }
 
-    fun release() {
-        stopInternal()
-        audioTrack?.release()
-        audioTrack = null
+    /** End the session: stop the worker and release the track. */
+    fun stop() = teardown()
+
+    fun release() = teardown()
+
+    fun elapsedSamples(): Long = samplesElapsed
+
+    private fun teardown() {
+        val t: AudioTrack?
+        val w: Thread?
+        synchronized(lock) {
+            sessionRunning = false
+            t = track
+            w = worker
+            track = null
+            worker = null
+            curSchedule = null
+            playPos = 0L
+            samplesElapsed = 0L
+        }
+        // Join outside the lock so the worker (which may briefly take the
+        // lock to snapshot state) can finish its current block and exit.
+        w?.let { try { it.join(500) } catch (_: InterruptedException) {} }
+        t?.let {
+            try { it.pause() } catch (_: IllegalStateException) {}
+            try { it.flush() } catch (_: IllegalStateException) {}
+            try { it.stop() } catch (_: IllegalStateException) {}
+            try { it.release() } catch (_: Exception) {}
+        }
+        _state.value = State.STOPPED
     }
 
-    fun elapsedSamples(): Long = samplesWritten
-
-    private fun ensureTrack(): AudioTrack {
-        audioTrack?.let { return it }
+    /** Must hold [lock]. Creates the track + worker if the session isn't up. */
+    private fun ensureSessionStartedLocked() {
+        if (sessionRunning && worker?.isAlive == true) return
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         ).coerceAtLeast(blockSize * 4)
-
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -120,131 +151,121 @@ class CwAudioEngine(
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .build()
-        val track = AudioTrack(
+        val t = AudioTrack(
             attrs, format, minBuf,
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE,
         )
-        audioTrack = track
-        return track
+        t.play()
+        track = t
+        sessionRunning = true
+        worker = Thread({ pumpLoop(t) }, "CW-AudioEngine").apply {
+            isDaemon = true
+            start()
+        }
     }
 
-    private fun pumpTo(track: AudioTrack, sched: Schedule) {
-        val block: FloatArray = FloatArray(blockSize)
-        val noiseBuf: FloatArray = FloatArray(blockSize)
-        val pcm: ShortArray = ShortArray(blockSize)
-        var localWrite: Long = 0L
-        val master: Float = config.masterVolume
-        // Tone fading is always on; clicks at element boundaries are
-        // always smoothed via the envelope. Used to be a user toggle,
-        // but in practice no one wanted the clicky variant, so it is
-        // not configurable anymore.
-        val fading: Boolean = true
-        val noiseEnabled: Boolean = config.noiseType != NoiseType.NONE && config.noiseVolume > 0f
-        val noiseVol: Float = config.noiseVolume
-        val maxSamples: Long = sched.totalSamples.toLong()
+    /**
+     * The single per-session render loop. Renders the active schedule when
+     * PLAYING and streams silence otherwise, so the track stays warm.
+     */
+    private fun pumpLoop(track: AudioTrack) {
+        val block = FloatArray(blockSize)
+        val noiseBuf = FloatArray(blockSize)
+        val pcm = ShortArray(blockSize)
 
-        while (running && localWrite <= maxSamples + sampleRate) {
-            if (_state.value == State.PAUSED) {
-                Thread.sleep(10)
+        // One-time cold-start pre-roll so the first real tone isn't clipped.
+        repeat(PREROLL_BLOCKS) {
+            if (!sessionRunning) return
+            track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
+        }
+
+        while (sessionRunning) {
+            if (_state.value != State.PLAYING) {
+                track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
                 continue
             }
 
-            // 1) Zero the block.
-            block.fill(0f)
+            val sched: Schedule?
+            val pos: Long
+            val cfg: PracticeConfig
+            val ns: NoiseGenerator
+            synchronized(lock) {
+                sched = curSchedule
+                pos = playPos
+                cfg = curConfig
+                ns = curNoise
+            }
 
-            // 2) Sum contributions from every ToneEvent that overlaps this block.
-            for (event in sched.events) {
-                val blockEnd: Long = localWrite + blockSize
-                val evStart: Long = event.startSample.toLong()
-                val evEnd: Long = event.endSample.toLong()
-                if (evEnd <= localWrite || evStart >= blockEnd) continue
-
-                val startInBlock: Int = (evStart - localWrite).toInt().coerceAtLeast(0)
-                val endInBlock: Int = (evEnd - localWrite).toInt().coerceAtMost(blockSize)
-                val toneLenSamples: Int = (evEnd - evStart).toInt()
-                val freq: Double = event.freqHz.toDouble()
-                for (i in startInBlock until endInBlock) {
-                    val sampleIdxInEvent: Long = localWrite + i - evStart
-                    val phase: Double = 2.0 * PI * freq * sampleIdxInEvent / sampleRate
-                    val env: Float = if (fading) envelope.gain(sampleIdxInEvent.toInt(), toneLenSamples) else 1f
-                    val tone: Float = sin(phase).toFloat() * event.amplitude * env * 0.5f
-                    block[i] += tone
+            if (sched == null || pos >= sched.totalSamples) {
+                // Current schedule finished (or none): mark done and idle.
+                synchronized(lock) {
+                    if (curSchedule === sched && _state.value == State.PLAYING) {
+                        _state.value = State.STOPPED
+                    }
                 }
+                track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
+                continue
             }
 
-            // 3) Generate noise into a separate buffer and blend it.
-            if (noiseEnabled) {
-                noise.fill(noiseBuf, 0, blockSize)
-                for (i in 0 until blockSize) {
-                    block[i] = block[i] * (1f - noiseVol) + noiseBuf[i] * noiseVol
-                }
-            }
-
-            // 4) Master volume, clamp, and convert to int16.
-            for (i in 0 until blockSize) {
-                val clipped: Float = (block[i] * master).coerceIn(-1f, 1f)
-                block[i] = clipped
-                pcm[i] = (clipped * Short.MAX_VALUE).toInt().toShort()
-            }
-
+            renderBlock(block, noiseBuf, pcm, sched, pos, cfg, ns)
             val written = track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
             if (written < 0) break
 
-            localWrite = localWrite + blockSize.toLong()
-            writePos = localWrite
-            samplesWritten = localWrite
-
-            if (localWrite > maxSamples + sampleRate) break
+            synchronized(lock) {
+                if (curSchedule === sched) {
+                    playPos = pos + blockSize
+                    samplesElapsed = playPos
+                }
+            }
         }
-        // Only flip state if WE are still the current worker - otherwise
-        // a brand-new worker has already taken over and we'd yank its
-        // PLAYING state back to STOPPED, briefly silencing the new
-        // playback (this is what made the courtesy tone vanish
-        // intermittently when the prior item's worker was still exiting
-        // while play() raced ahead).
-        if (Thread.currentThread() === workerThread) {
-            _state.value = State.STOPPED
-        }
-        running = false
     }
 
-    private fun stopInternal() {
-        running = false
-        workerThread?.let {
-            // Bumped from 200ms to 500ms: a real device can take a few
-            // hundred ms to drain a full 1024-sample blocking write on
-            // a busy I/O scheduler, and stopping too early left the
-            // worker alive with state still PLAYING - which silently
-            // skipped the courtesy tone on the next play() call.
-            try { it.join(500) } catch (_: InterruptedException) {}
+    /** Render one [blockSize] block of [sched] starting at absolute [pos]. */
+    private fun renderBlock(
+        block: FloatArray,
+        noiseBuf: FloatArray,
+        pcm: ShortArray,
+        sched: Schedule,
+        pos: Long,
+        cfg: PracticeConfig,
+        ns: NoiseGenerator,
+    ) {
+        val master = cfg.masterVolume
+        val noiseEnabled = cfg.noiseType != NoiseType.NONE && cfg.noiseVolume > 0f
+        val noiseVol = cfg.noiseVolume
+
+        block.fill(0f)
+
+        // Sum every ToneEvent overlapping this block.
+        for (event in sched.events) {
+            val blockEnd = pos + blockSize
+            val evStart = event.startSample.toLong()
+            val evEnd = event.endSample.toLong()
+            if (evEnd <= pos || evStart >= blockEnd) continue
+
+            val startInBlock = (evStart - pos).toInt().coerceAtLeast(0)
+            val endInBlock = (evEnd - pos).toInt().coerceAtMost(blockSize)
+            val toneLenSamples = (evEnd - evStart).toInt()
+            val freq = event.freqHz.toDouble()
+            for (i in startInBlock until endInBlock) {
+                val sampleIdxInEvent = pos + i - evStart
+                val phase = 2.0 * PI * freq * sampleIdxInEvent / sampleRate
+                val env = envelope.gain(sampleIdxInEvent.toInt(), toneLenSamples)
+                block[i] += sin(phase).toFloat() * event.amplitude * env * 0.5f
+            }
         }
-        workerThread = null
-        // Explicitly flip state to STOPPED here so a subsequent play()
-        // is never confused by a "stale" PLAYING state set by a worker
-        // that hasn't yet finished its last write. The dying worker
-        // is guarded by a thread-identity check in pumpTo, so it can
-        // no longer flip us back into STOPPED once a new worker has
-        // taken over.
-        _state.value = State.STOPPED
-        audioTrack?.let {
-            try { it.pause() } catch (_: IllegalStateException) {}
-            try { it.flush() } catch (_: IllegalStateException) {}
-            try { it.stop() } catch (_: IllegalStateException) {}
-            // Release the track entirely. Reusing an AudioTrack across
-            // multiple stop()/play() cycles is known to misbehave on
-            // some Android OEM builds: after a stop(), the next play()
-            // can be silently inaudible because AudioFlinger still has
-            // the resampler in a partially-primed state from the prior
-            // session. Throwing the track away and letting `ensureTrack`
-            // create a fresh one guarantees the next playback starts on
-            // a clean write head. AudioTrack creation is cheap (a few ms)
-            // and the orchestrator already has a post-pause + TTS settle
-            // window between items, so no audible gap is introduced.
-            try { it.release() } catch (_: Exception) {}
+
+        if (noiseEnabled) {
+            ns.fill(noiseBuf, 0, blockSize)
+            for (i in 0 until blockSize) {
+                block[i] = block[i] * (1f - noiseVol) + noiseBuf[i] * noiseVol
+            }
         }
-        audioTrack = null
-        writePos = 0L
-        samplesWritten = 0L
+
+        for (i in 0 until blockSize) {
+            val clipped = (block[i] * master).coerceIn(-1f, 1f)
+            pcm[i] = (clipped * Short.MAX_VALUE).toInt().toShort()
+        }
     }
 }

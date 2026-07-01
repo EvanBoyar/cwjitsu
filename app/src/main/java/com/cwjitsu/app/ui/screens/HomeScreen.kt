@@ -28,15 +28,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Newspaper
-import androidx.compose.material.icons.filled.QuestionAnswer
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SettingsInputAntenna
-import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Sos
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -1275,11 +1275,11 @@ private fun ContentKind.label(): String = when (this) {
 }
 
 private fun ContentKind.icon(): ImageVector = when (this) {
-    ContentKind.CHARACTERS -> Icons.Filled.TextFields
-    ContentKind.PROSIGNS_QCODES -> Icons.Filled.QuestionAnswer
-    ContentKind.WORDS -> Icons.Filled.Translate
+    ContentKind.CHARACTERS -> Icons.Filled.Translate
+    ContentKind.PROSIGNS_QCODES -> Icons.Filled.Sos
+    ContentKind.WORDS -> Icons.AutoMirrored.Filled.MenuBook
     ContentKind.TEXT -> Icons.AutoMirrored.Filled.Article
-    ContentKind.CALLSIGNS -> Icons.Filled.SettingsInputAntenna
+    ContentKind.CALLSIGNS -> Icons.Filled.Public
     ContentKind.NEWS -> Icons.Filled.Newspaper
 }
 

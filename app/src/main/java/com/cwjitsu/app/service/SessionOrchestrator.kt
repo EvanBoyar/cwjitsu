@@ -20,7 +20,6 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.yield
 import kotlin.coroutines.resume
 
 /** Async content provider; called by the orchestrator each round. */
@@ -135,10 +134,11 @@ class SessionOrchestrator(
         Log.d(TAG, "skip")
         skipRequested = true
         _paused.value = false
-        // engine.stop() joins the render worker briefly; do it off the caller's
-        // (UI) thread so a tap never janks. Setting the flag first guarantees
-        // the loop observes the skip once waitForAudioToFinish returns.
-        scope.launch { engine.stop() }
+        // Abort just the current schedule (not the whole session), so the
+        // engine's track stays warm for the next item. Setting the flag first
+        // guarantees the loop observes the skip once waitForAudioToFinish
+        // returns (abort() flips the engine out of PLAYING).
+        engine.abort()
         tts.stop()
     }
 
@@ -296,14 +296,9 @@ class SessionOrchestrator(
     }
 
     private suspend fun playCourtesyTone(config: PracticeConfig) {
-        // Force-release any prior AudioTrack before we install the
-        // courtesy schedule. The previous fix already nulls the
-        // audioTrack field on every stopInternal, but being explicit
-        // here makes the intent unambiguous and bypasses any rare
-        // AudioFlinger state-leakage on extremely short, alternating
-        // playbacks ("every other one missing") that we observed in
-        // the field start with the first.
-        engine.release()
+        // The pip plays on the engine's warm, always-running session track,
+        // so there is no cold-start swallow to guard against - we just
+        // install the pip schedule and play it like any other item.
 
         // Two short tones back-to-back with NO gap between them, like the
         // familiar repeater "courtesy" pip that real repeaters emit at
@@ -374,15 +369,15 @@ class SessionOrchestrator(
 
     private suspend fun waitForAudioToFinish(totalSamples: Int) {
         val budgetSamples = totalSamples + engine.sampleRate
-        var iters = 0
+        // Poll on a short delay rather than a tight yield loop: one audio
+        // block is ~23 ms, so 10 ms granularity detects completion promptly
+        // without burning a core for the length of the item (which matters
+        // for long news headlines).
         while (engine.state.value == CwAudioEngine.State.PLAYING ||
             engine.state.value == CwAudioEngine.State.PAUSED
         ) {
             if (engine.elapsedSamples() >= budgetSamples) return
-            if (++iters % 200 == 0) {
-                Log.d(TAG, "waitForAudio iters=$iters state=${engine.state.value} elapsed=${engine.elapsedSamples()}/$budgetSamples")
-            }
-            yield()
+            delay(10)
         }
     }
 
