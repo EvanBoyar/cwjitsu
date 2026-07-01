@@ -17,7 +17,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlin.coroutines.resume
 
@@ -43,19 +45,41 @@ class SessionOrchestrator(
 
     enum class RunnerState { IDLE, RUNNING, FINISHED, STOPPED }
 
+    /**
+     * Rolling "now playing" window: the item currently being sent
+     * ([current]) and the one sent immediately before it ([previous]).
+     * Advances one step each time a new item starts playing, spanning
+     * batch boundaries, so the UI shows only these two at a time rather
+     * than the whole upcoming batch (which would spoil the answers).
+     */
+    data class NowPlaying(
+        val previous: ContentItem? = null,
+        val current: ContentItem? = null,
+    )
+
     private val _state = MutableStateFlow(RunnerState.IDLE)
     val runnerState: StateFlow<RunnerState> = _state
 
-    private val _currentBatch = MutableStateFlow<List<ContentItem>>(emptyList())
-    val currentBatch: StateFlow<List<ContentItem>> = _currentBatch
+    private val _nowPlaying = MutableStateFlow(NowPlaying())
+    val nowPlaying: StateFlow<NowPlaying> = _nowPlaying
+
+    // Whether a RUNNING session is paused in place (via the media
+    // notification, a Bluetooth/headset button, or the in-app control).
+    // Distinct from STOPPED: a paused session keeps its position and
+    // resumes where it left off; a stopped session is torn down.
+    private val _paused = MutableStateFlow(false)
+    val paused: StateFlow<Boolean> = _paused
 
     private var job: Job? = null
 
     fun start(regenerator: ContentRegenerator, config: PracticeConfig) {
         stop()
         Log.d(TAG, "start regenerator")
+        _paused.value = false
         job = scope.launch(Dispatchers.Default) {
             _state.value = RunnerState.RUNNING
+            // Fresh session starts with a blank now-playing window.
+            _nowPlaying.value = NowPlaying()
             try {
             while (isActive) {
                 val items = regenerator(config)
@@ -67,11 +91,10 @@ class SessionOrchestrator(
                     // enable content. The session stays "armed" in the
                     // RUNNING state and starts playing as soon as the
                     // regenerator returns a non-empty list.
-                    _currentBatch.value = emptyList()
+                    _nowPlaying.value = NowPlaying()
                     delay(500)
                     continue
                 }
-                _currentBatch.value = items
                 playBatch(items, config)
             }
                 _state.value = RunnerState.FINISHED
@@ -90,7 +113,43 @@ class SessionOrchestrator(
         job?.cancel()
         engine.stop()
         tts.stop()
+        _paused.value = false
         _state.value = RunnerState.STOPPED
+    }
+
+    /**
+     * Pause a running session in place. The currently sounding element is
+     * frozen (the audio engine pauses its track) and any in-flight spoken
+     * answer is cut, since the platform TTS engine cannot be paused. The
+     * orchestrator loop parks at its next checkpoint and does not advance
+     * until [resume]. No-op unless a session is RUNNING and not already
+     * paused.
+     */
+    fun pause() {
+        if (_state.value != RunnerState.RUNNING || _paused.value) return
+        Log.d(TAG, "pause")
+        _paused.value = true
+        engine.pause()
+        tts.stop()
+    }
+
+    /** Resume a paused session from where it stopped. No-op if not paused. */
+    fun resume() {
+        if (_state.value != RunnerState.RUNNING || !_paused.value) return
+        Log.d(TAG, "resume")
+        _paused.value = false
+        engine.resume()
+    }
+
+    /**
+     * Suspend while the session is paused. Every audio-producing step in
+     * [playBatch] passes through here first so nothing sounds — and the
+     * rolling now-playing window doesn't advance — while paused.
+     */
+    private suspend fun awaitResume() {
+        while (_paused.value && coroutineContext.isActive) {
+            delay(50)
+        }
     }
 
     private suspend fun playBatch(items: List<ContentItem>, config: PracticeConfig) {
@@ -107,6 +166,18 @@ class SessionOrchestrator(
                     .joinToString("")
             Log.d(TAG, "playBatch item[$idx] morse='${morse.take(80)}' isBlank=${morse.isBlank()}")
             if (morse.isBlank()) continue
+
+            // Park here while paused so we don't advance to the next item
+            // (or its now-playing label) until the user resumes.
+            awaitResume()
+
+            // Advance the rolling now-playing window: what we sent last
+            // becomes "previous", this item becomes "current". Done here,
+            // after the blank-morse skip, so skipped items never appear.
+            _nowPlaying.value = NowPlaying(
+                previous = _nowPlaying.value.current,
+                current = item,
+            )
 
             val batchForRep = List(reps) { item }
             val schedule = builder.build(batchForRep, timesToRepeat = 1, config = config)
@@ -145,6 +216,7 @@ class SessionOrchestrator(
                 // counted as a repetition. Useful for catching a code
                 // the listener missed on the first listening pass.
                 if (config.replayAfterAnswer) {
+                    awaitResume()
                     delay(config.answerDelayMs)
                     val replay = builder.build(listOf(item), timesToRepeat = 1, config = config)
                     engine.setSchedule(replay, config)
@@ -152,23 +224,50 @@ class SessionOrchestrator(
                     waitForAudioToFinish(replay.totalSamples)
                 }
             }
+
+            // Courtesy tone: a short pip played after EACH item (once its
+            // code and spoken answer have finished), like a real repeater's
+            // courtesy tone after every over. This marks the boundary
+            // between transmissions so the listener hears the end of each
+            // item, not just the end of the whole batch. Disabled by
+            // config. Always uses the currently tuned frequency so it
+            // matches the practice tone.
+            if (config.courtesyToneEnabled) {
+                // Don't let the end-of-item pip sound while paused.
+                awaitResume()
+                Log.d(TAG, "playCourtesyTone ENTER item[$idx]")
+                // Let the platform TTS engine release audio focus and drain
+                // its final phoneme before our pip plays. The previous "/"-
+                // sanitization fix addressed the wider audible bug for
+                // decorated callsigns (commit 65f2b0e). On the FIRST item
+                // of a freshly-pressed Play session, the TTS engine is
+                // still warming up its speech model and holds USAGE_MEDIA
+                // audio focus for noticeably longer than on subsequent
+                // utterances: stock Android pipes duck our courtesy pip into
+                // inaudibility for that window. 400 ms is comfortably
+                // longer than the worst observed first TTS focus-release
+                // latency (~250 ms on a Pixel 7) and short enough that the
+                // listener still feels the pip as part of the same
+                // sequence. Only needed when an answer (TTS) was actually
+                // spoken for this item; otherwise skip the wait.
+                if (config.answerEnabled) delay(400)
+                playCourtesyTone(config)
+                Log.d(TAG, "playCourtesyTone EXIT item[$idx]")
+            }
         }
         Log.d(TAG, "playBatch EXIT for-loop, courtesy=${config.courtesyToneEnabled}")
-
-        // Courtesy tone: short tone played once after the whole batch
-        // answers have finished, like a real repeater's "dit" at the
-        // end of a sequence. Disabled by config. Always uses the
-        // currently tuned frequency so it matches the practice tone.
-        if (config.courtesyToneEnabled) {
-            Log.d(TAG, "playCourtesyTone ENTER")
-            playCourtesyTone(config)
-            Log.d(TAG, "playCourtesyTone EXIT")
-        } else {
-            Log.d(TAG, "playCourtesyTone SKIPPED disabled")
-        }
     }
 
     private suspend fun playCourtesyTone(config: PracticeConfig) {
+        // Force-release any prior AudioTrack before we install the
+        // courtesy schedule. The previous fix already nulls the
+        // audioTrack field on every stopInternal, but being explicit
+        // here makes the intent unambiguous and bypasses any rare
+        // AudioFlinger state-leakage on extremely short, alternating
+        // playbacks ("every other one missing") that we observed in
+        // the field start with the first.
+        engine.release()
+
         // Two short tones back-to-back with NO gap between them, like the
         // familiar repeater "courtesy" pip that real repeaters emit at
         // the end of a sequence. Fixed at 50 ms per tone and 947 / 1187
@@ -183,9 +282,28 @@ class SessionOrchestrator(
         // the session, not louder. Bypassing Master/volume-variation
         // would otherwise make the courtesy tone pop out awkwardly.
         val courtesyAmp = if (config.volumeVariationEnabled) 0.92f else 1.0f
-        val firstEvent = ToneEvent(
+        // 30 ms silent warm-up. Android's native AudioFlinger mixer
+        // routinely swallows the first ~10–40 ms of a freshly created
+        // AudioTrack while its resampler and output stage spin up. For
+        // a 50 ms pip, losing a quarter of the symbol is enough to
+        // make the whole courtesy tone perceptually vanish on some
+        // devices — the alternating-batch symptom we observed before
+        // this fix. Prepending a short zero-amplitude event gives the
+        // mixer time to consume/flush that warm-up window so the next
+        // two events are heard at full amplitude.
+        val warmupSamples = (30L * engine.sampleRate / 1000)
+            .toInt()
+            .coerceAtLeast(1)
+        val warmupEvent = ToneEvent(
             startSample = 0,
-            endSample = toneSamples,
+            endSample = warmupSamples,
+            freqHz = 0,
+            amplitude = 0f,
+            label = "warmup",
+        )
+        val firstEvent = ToneEvent(
+            startSample = warmupSamples,
+            endSample = warmupSamples + toneSamples,
             freqHz = 947,
             amplitude = courtesyAmp,
             label = "courtesy1",
@@ -196,15 +314,15 @@ class SessionOrchestrator(
         // overlapping; if they overlapped, it would just sum both
         // frequencies into a buzz instead of a clean two-tone pip.
         val secondEvent = ToneEvent(
-            startSample = toneSamples,
-            endSample = toneSamples * 2,
+            startSample = warmupSamples + toneSamples,
+            endSample = warmupSamples + toneSamples * 2,
             freqHz = 1187,
             amplitude = courtesyAmp,
             label = "courtesy2",
         )
         val courtesy = Schedule(
-            events = listOf(firstEvent, secondEvent),
-            totalSamples = toneSamples * 2,
+            events = listOf(warmupEvent, firstEvent, secondEvent),
+            totalSamples = warmupSamples + toneSamples * 2,
             sampleRate = engine.sampleRate,
         )
         engine.setSchedule(courtesy, config)
@@ -232,9 +350,21 @@ class SessionOrchestrator(
     }
 
     private suspend fun awaitTts(text: String, utteranceId: String): Boolean =
-        suspendCancellableCoroutine { cont ->
-            tts.speak(text, utteranceId) { ok ->
-                if (cont.isActive) cont.resume(ok)
+        // Bound every per-item TTS wait so a flaky platform engine that
+        // never fires `onDone` for some pathological utterance cannot
+        // wedge the orchestrator before the post-batch courtesy tone
+        // plays. 10 seconds is well above any utterance length a user
+        // will hear at any reasonable WPM, and short enough that a wedged
+        // answer recovers within one batch rather than stalling the whole
+        // session.
+        withTimeoutOrNull(10_000L) {
+            suspendCancellableCoroutine { cont ->
+                tts.speak(text, utteranceId) { ok ->
+                    if (cont.isActive) cont.resume(ok)
+                }
             }
+        } ?: run {
+            Log.w(TAG, "awaitTts TIMEOUT after 10s id='$utteranceId' — proceeding to next item so courtesy tone still plays")
+            false
         }
 }

@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.cwjitsu.app.practice.NoiseType
+import com.cwjitsu.app.ui.theme.cwSwitchColors
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.SloppyMode
 
@@ -282,7 +283,7 @@ private fun SloppyModeRow(
 private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = cwSwitchColors())
     }
 }
 
@@ -295,6 +296,6 @@ private fun NoiseRow(label: String, selected: Boolean, onSelect: () -> Unit) {
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = selected, onCheckedChange = { onSelect() })
+        Switch(checked = selected, onCheckedChange = { onSelect() }, colors = cwSwitchColors())
     }
 }

@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.util.Log
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,10 @@ class CwAudioEngine(
     private var noise: NoiseGenerator = NoiseGenerator(NoiseType.NONE)
     private val envelope = Envelope(sampleRate)
 
+    companion object {
+        private const val TAG = "CWJitsu/Audio"
+    }
+
     @Volatile private var writePos: Long = 0L
     @Volatile private var samplesWritten: Long = 0L
     @Volatile private var running: Boolean = false
@@ -45,7 +50,17 @@ class CwAudioEngine(
 
     fun play() {
         val sched = schedule ?: return
-        if (_state.value == State.PLAYING) return
+        if (_state.value == State.PLAYING) {
+            // Defensive: stopInternal should already have left us in
+            // State.STOPPED, but if a previous worker is still mid-
+            // `track.write()` (e.g. an oversized block or a slow device),
+            // force-stop here so we never silently skip starting the
+            // new playback. Without this guard the courtesy-pip was the
+            // most common casualty because the post-batch play() was
+            // racing with a still-dying worker.
+            Log.w(TAG, "play: stale PLAYING state, force-stopping before new playback")
+            stopInternal()
+        }
 
         val track = ensureTrack()
         track.play()
@@ -53,10 +68,14 @@ class CwAudioEngine(
         running = true
         writePos = 0L
         samplesWritten = 0L
-        workerThread = Thread({ pumpTo(track, sched) }, "CW-AudioEngine").also {
+        // Assign the worker field BEFORE start() so that pumpTo's
+        // thread-identity check (see end of pumpTo) can immediately tell
+        // whether it is still the current worker when its loop ends.
+        val worker = Thread({ pumpTo(track, sched) }, "CW-AudioEngine").also {
             it.isDaemon = true
-            it.start()
         }
+        workerThread = worker
+        worker.start()
     }
 
     fun pause() {
@@ -178,21 +197,53 @@ class CwAudioEngine(
 
             if (localWrite > maxSamples + sampleRate) break
         }
-        _state.value = State.STOPPED
+        // Only flip state if WE are still the current worker — otherwise
+        // a brand-new worker has already taken over and we'd yank its
+        // PLAYING state back to STOPPED, briefly silencing the new
+        // playback (this is what made the courtesy tone vanish
+        // intermittently when the prior item's worker was still exiting
+        // while play() raced ahead).
+        if (Thread.currentThread() === workerThread) {
+            _state.value = State.STOPPED
+        }
         running = false
     }
 
     private fun stopInternal() {
         running = false
         workerThread?.let {
-            try { it.join(200) } catch (_: InterruptedException) {}
+            // Bumped from 200ms to 500ms: a real device can take a few
+            // hundred ms to drain a full 1024-sample blocking write on
+            // a busy I/O scheduler, and stopping too early left the
+            // worker alive with state still PLAYING — which silently
+            // skipped the courtesy tone on the next play() call.
+            try { it.join(500) } catch (_: InterruptedException) {}
         }
         workerThread = null
+        // Explicitly flip state to STOPPED here so a subsequent play()
+        // is never confused by a "stale" PLAYING state set by a worker
+        // that hasn't yet finished its last write. The dying worker
+        // is guarded by a thread-identity check in pumpTo, so it can
+        // no longer flip us back into STOPPED once a new worker has
+        // taken over.
+        _state.value = State.STOPPED
         audioTrack?.let {
             try { it.pause() } catch (_: IllegalStateException) {}
             try { it.flush() } catch (_: IllegalStateException) {}
             try { it.stop() } catch (_: IllegalStateException) {}
+            // Release the track entirely. Reusing an AudioTrack across
+            // multiple stop()/play() cycles is known to misbehave on
+            // some Android OEM builds: after a stop(), the next play()
+            // can be silently inaudible because AudioFlinger still has
+            // the resampler in a partially-primed state from the prior
+            // session. Throwing the track away and letting `ensureTrack`
+            // create a fresh one guarantees the next playback starts on
+            // a clean write head. AudioTrack creation is cheap (a few ms)
+            // and the orchestrator already has a post-pause + TTS settle
+            // window between items, so no audible gap is introduced.
+            try { it.release() } catch (_: Exception) {}
         }
+        audioTrack = null
         writePos = 0L
         samplesWritten = 0L
     }

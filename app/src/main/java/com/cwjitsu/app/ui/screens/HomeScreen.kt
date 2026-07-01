@@ -77,7 +77,6 @@ import com.cwjitsu.app.R
 import com.cwjitsu.app.data.WordDictionary
 import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
-import com.cwjitsu.app.practice.ContentItem
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
@@ -85,6 +84,7 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
+import com.cwjitsu.app.ui.theme.cwSwitchColors
 import com.cwjitsu.app.ui.components.PlaybackControls
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -114,7 +114,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     val config by app.settings.configFlow.collectAsStateWithLifecycle(initialValue = PracticeConfig())
     val orchestrator = app.orchestrator
     val runnerState by orchestrator.runnerState.collectAsStateWithLifecycle()
-    val currentBatch by orchestrator.currentBatch.collectAsStateWithLifecycle()
+    val nowPlaying by orchestrator.nowPlaying.collectAsStateWithLifecycle()
     val savedConfig by app.settings.mixedConfigFlow.collectAsStateWithLifecycle(initialValue = null)
     val effectiveConfig: MixedConfig = savedConfig ?: MixedConfig()
     // "Now playing" is hidden by default to avoid spoiling the answer.
@@ -188,7 +188,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Image(
                             painter = painterResource(id = R.drawable.cwjicon),
                             contentDescription = null,
@@ -196,7 +196,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                                 .size(36.dp)
                                 .padding(end = 8.dp),
                         )
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("CW Jitsu", fontWeight = FontWeight.SemiBold)
                             Text(
                                 "Morse practice",
@@ -204,15 +204,28 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             )
                         }
+                        // Small build version to the right of the app
+                        // name so the user can verify which build is
+                        // running at a glance. Style kept deliberately
+                        // tiny and low-contrast so it doesn't fight for
+                        // attention with the title itself.
+                        Text(
+                            text = "v" + com.cwjitsu.app.BuildConfig.VERSION_NAME,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
                     }
                 },
                 actions = {
                     IconButton(onClick = { showNowPlaying = !showNowPlaying }) {
                         Icon(
-                            imageVector = if (showNowPlaying) Icons.Filled.VisibilityOff
-                                          else Icons.Filled.Visibility,
+                            imageVector = if (showNowPlaying) Icons.Filled.Visibility
+                                          else Icons.Filled.VisibilityOff,
                             contentDescription = if (showNowPlaying) "Hide now playing"
                                                  else "Show now playing",
+                            tint = if (showNowPlaying) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                         )
                     }
                     IconButton(onClick = onPickSettings) {
@@ -229,6 +242,19 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars),
             ) {
+                // "Now playing" is pinned directly above the controls so
+                // it stays visible during a session instead of scrolling
+                // off the bottom of the content column.
+                if (showNowPlaying) {
+                    PreviewPane(
+                        nowPlaying = nowPlaying,
+                        modifier = Modifier.padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = 12.dp,
+                        ),
+                    )
+                }
                 HorizontalDivider()
                 PlaybackControls(
                     isRunning = runnerState == SessionOrchestrator.RunnerState.RUNNING,
@@ -407,6 +433,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     Switch(
                         checked = effectiveConfig.callsignRandomPrefix,
                         onCheckedChange = { setCallsignRandomPrefix(it) },
+                        colors = cwSwitchColors(),
                     )
                 }
                 Text(
@@ -427,6 +454,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     Switch(
                         checked = effectiveConfig.callsignRandomSuffix,
                         onCheckedChange = { setCallsignRandomSuffix(it) },
+                        colors = cwSwitchColors(),
                     )
                 }
                 Text(
@@ -460,9 +488,6 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 )
             }
 
-            if (showNowPlaying) {
-                PreviewPane(items = currentBatch)
-            }
         }
     }
 }
@@ -583,9 +608,12 @@ private fun TextSourceField(
 }
 
 @Composable
-private fun PreviewPane(items: List<ContentItem>) {
+private fun PreviewPane(
+    nowPlaying: SessionOrchestrator.NowPlaying,
+    modifier: Modifier = Modifier,
+) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 88.dp, max = 200.dp),
         shape = RoundedCornerShape(12.dp),
@@ -593,10 +621,11 @@ private fun PreviewPane(items: List<ContentItem>) {
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
-                "Now playing (${items.size})",
+                "Now playing",
                 style = MaterialTheme.typography.titleLarge,
             )
-            if (items.isEmpty()) {
+            val current = nowPlaying.current
+            if (current == null) {
                 Text(
                     "Toggle a category and press Play.",
                     style = MaterialTheme.typography.bodyLarge,
@@ -604,20 +633,21 @@ private fun PreviewPane(items: List<ContentItem>) {
                     modifier = Modifier.padding(top = 6.dp),
                 )
             } else {
-                val shown = items.take(20)
-                val joined = shown.joinToString(" · ") { it.text }
+                // Previous item sent, dimmed — shown for context so the
+                // listener can confirm what they just copied.
                 Text(
-                    joined,
+                    "Prev · " + (nowPlaying.previous?.text ?: "—"),
                     style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                if (items.size > shown.size) {
-                    Text(
-                        "... and ${items.size - shown.size} more",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    )
-                }
+                // Current item being sent, prominent.
+                Text(
+                    current.text,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
             }
         }
     }
