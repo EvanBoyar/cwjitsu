@@ -28,12 +28,12 @@ private const val RANDOM_DECORATION_PROBABILITY = 0.25f
  * prefix + digit + suffix.
  *
  * Three mutation modes per side (prefix and suffix are independent):
- *   1. No decoration — pass `null` or empty for [formatPrefix] / [formatSuffix]
+ *   1. No decoration - pass `null` or empty for [formatPrefix] / [formatSuffix]
  *      and leave [randomPrefix] / [randomSuffix] false (default).
- *   2. Fixed decoration — pass specific strings for [formatPrefix] /
+ *   2. Fixed decoration - pass specific strings for [formatPrefix] /
  *      [formatSuffix]; they are stitched around the core callsign every
  *      time. `null` or empty means "no decoration" on that side.
- *   3. Occasional random decoration — set [randomPrefix] / [randomSuffix]
+ *   3. Occasional random decoration - set [randomPrefix] / [randomSuffix]
  *      to true; the corresponding [formatPrefix] / [formatSuffix] are
  *      ignored. Each call rolls
  *      [RANDOM_DECORATION_PROBABILITY] independently for prefix and
@@ -51,7 +51,7 @@ class CallsignGenerator(private val random: Random = Random.Default) {
     ): String {
         // Resolve effective prefix/suffix for this single call. When
         // random* is on, the side is independently rolled and a non-null
-        // option is sampled from the registry list — the null entries
+        // option is sampled from the registry list - the null entries
         // are dropped so we never accidentally pick "no prefix" as if
         // it were a value (which would just produce a bare callsign
         // anyway, but doing it explicitly keeps the intent clear).

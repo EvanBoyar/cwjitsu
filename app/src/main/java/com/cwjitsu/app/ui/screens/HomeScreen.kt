@@ -48,6 +48,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
@@ -59,6 +60,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,13 +77,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cwjitsu.app.CWJitsuApp
 import com.cwjitsu.app.R
+import com.cwjitsu.app.data.NewsStatus
 import com.cwjitsu.app.data.WordDictionary
 import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
+import com.cwjitsu.app.practice.ContentItem
 import com.cwjitsu.app.practice.Morse
+import com.cwjitsu.app.practice.NewsSource
+import com.cwjitsu.app.practice.NewsSources
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.service.ContentRegenerator
@@ -95,7 +101,7 @@ import kotlinx.coroutines.launch
 
 /**
  * The Home screen is the app's only practice surface. It hosts the
- * category toggles (the old "quick practice" tiles are gone — the tiles
+ * category toggles (the old "quick practice" tiles are gone - the tiles
  * were the same thing as the mixed-practice toggles) and the per-category
  * settings that only apply when a given category is enabled:
  *
@@ -117,6 +123,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     val orchestrator = app.orchestrator
     val runnerState by orchestrator.runnerState.collectAsStateWithLifecycle()
     val nowPlaying by orchestrator.nowPlaying.collectAsStateWithLifecycle()
+    val newsStatus by app.news.status.collectAsStateWithLifecycle()
     val savedConfig by app.settings.mixedConfigFlow.collectAsStateWithLifecycle(initialValue = null)
     val effectiveConfig: MixedConfig = savedConfig ?: MixedConfig()
     // "Now playing" is hidden by default to avoid spoiling the answer.
@@ -171,6 +178,48 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    fun refreshNews() {
+        scope.launch {
+            val cfg = app.settings.mixedConfigFlow.first() ?: MixedConfig()
+            app.news.refresh(NewsSources.active(cfg.enabledNewsSources, cfg.customNewsFeeds))
+        }
+    }
+
+    fun toggleNewsSource(id: String) {
+        scope.launch {
+            app.settings.updateMixedConfig { c ->
+                val ns = if (id in c.enabledNewsSources) c.enabledNewsSources - id
+                         else c.enabledNewsSources + id
+                c.copy(enabledNewsSources = ns)
+            }
+            refreshNews()
+        }
+    }
+
+    fun addCustomFeed(url: String) {
+        val normalized = url.trim().let { if (it.startsWith("http")) it else "https://$it" }
+        if (normalized.length <= "https://".length) return
+        scope.launch {
+            app.settings.updateMixedConfig { c ->
+                if (normalized in c.customNewsFeeds) c
+                else c.copy(customNewsFeeds = c.customNewsFeeds + normalized)
+            }
+            refreshNews()
+        }
+    }
+
+    fun removeCustomFeed(url: String) {
+        scope.launch {
+            app.settings.updateMixedConfig { c ->
+                c.copy(customNewsFeeds = c.customNewsFeeds - url)
+            }
+        }
+    }
+
+    fun setNewsNoRepeat(enabled: Boolean) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(newsNoRepeat = enabled) } }
+    }
+
     fun setProsignsEnabled(enabled: Boolean) {
         scope.launch { app.settings.updateMixedConfig { it.copy(prosignsEnabled = enabled) } }
     }
@@ -188,6 +237,18 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     val regenerator: ContentRegenerator = { cfg ->
         val current = app.settings.mixedConfigFlow.first() ?: MixedConfig()
         val words = WordDictionary.get(app)
+        // Pull one headline per round from the offline-first news cache. The
+        // shuffle-bag inside the repository guarantees no near-term repeats;
+        // it returns null when nothing is cached (e.g. offline first run).
+        val newsItem = if (ContentKind.NEWS in current.enabledKinds) {
+            app.news.nextHeadline()?.let { h ->
+                ContentItem(
+                    text = sanitizeHeadline(h.title),
+                    spokenAnswer = h.title,
+                    singleShot = current.newsNoRepeat,
+                )
+            }
+        } else null
         ContentMixer.build(
             enabledKinds = current.enabledKinds,
             words = words,
@@ -200,6 +261,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             characterPool = current.characterSet,
             prosignsEnabled = current.prosignsEnabled,
             qcodesEnabled = current.qcodesEnabled,
+            newsItem = newsItem,
         )
     }
 
@@ -279,6 +341,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     isRunning = runnerState == SessionOrchestrator.RunnerState.RUNNING,
                     onPlay = { orchestrator.start(regenerator, config) },
                     onStop = { orchestrator.stop() },
+                    onSkip = { orchestrator.skip() },
                 )
             }
         },
@@ -356,7 +419,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 )
                 if (!effectiveConfig.prosignsEnabled && !effectiveConfig.qcodesEnabled) {
                     Text(
-                        "Both are off — this category will stay silent until you enable one.",
+                        "Both are off - this category will stay silent until you enable one.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -422,16 +485,18 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 }
             }
 
-            // Per-category settings: News is a placeholder for now.
+            // Per-category settings: News sources + offline cache status.
             if (ContentKind.NEWS in effectiveConfig.enabledKinds) {
-                Text(
-                    "News",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    "Coming soon: hear recent headlines in Morse from news sources you choose. Selecting this category has no effect yet.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                NewsSettings(
+                    status = newsStatus,
+                    enabledSources = effectiveConfig.enabledNewsSources,
+                    customFeeds = effectiveConfig.customNewsFeeds,
+                    noRepeat = effectiveConfig.newsNoRepeat,
+                    onToggleSource = { toggleNewsSource(it) },
+                    onAddFeed = { addCustomFeed(it) },
+                    onRemoveFeed = { removeCustomFeed(it) },
+                    onSetNoRepeat = { setNewsNoRepeat(it) },
+                    onRefresh = { refreshNews() },
                 )
             }
 
@@ -504,7 +569,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
 
                 // Decoration is two separate toggles so the user can pick
                 // exactly which side is occasionally present. Each side
-                // is independently rolled at 25% when its toggle is on —
+                // is independently rolled at 25% when its toggle is on -
                 // the listener hears mostly plain callsigns with the
                 // toggled side appearing occasionally. Replaces the
                 // previous combined toggle (and the /prefix + /suffix
@@ -733,7 +798,7 @@ private fun CharacterPicker(
         )
         if (selected.isEmpty()) {
             Text(
-                "No characters selected — this category will stay silent until you pick some.",
+                "No characters selected - this category will stay silent until you pick some.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -834,6 +899,165 @@ private fun CharKey(
     }
 }
 
+/**
+ * News category settings: offline-cache status + a refresh, the built-in
+ * source toggles, and add/remove for custom RSS/Atom feeds.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NewsSettings(
+    status: NewsStatus,
+    enabledSources: Set<String>,
+    customFeeds: List<String>,
+    noRepeat: Boolean,
+    onToggleSource: (String) -> Unit,
+    onAddFeed: (String) -> Unit,
+    onRemoveFeed: (String) -> Unit,
+    onSetNoRepeat: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    // Warm the cache when the panel first appears (e.g. just after the user
+    // enables News). Fails fast and harmlessly when offline.
+    LaunchedEffect(Unit) { onRefresh() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("News", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (status.refreshing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp).padding(end = 8.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+            TextButton(onClick = onRefresh, enabled = !status.refreshing) { Text("Refresh") }
+        }
+        Text(
+            text = newsStatusText(status),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+
+        // Headlines are long, so by default each one is sent once regardless
+        // of the global repeat count. This switch overrides that just for news.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Play each headline only once",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Switch(
+                checked = noRepeat,
+                onCheckedChange = onSetNoRepeat,
+                colors = cwSwitchColors(),
+            )
+        }
+        Text(
+            "Ignore the global repeat count for news - headlines are long.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+
+        Text("Sources", style = MaterialTheme.typography.titleSmall)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            NewsSources.BUILT_IN.forEach { src ->
+                FilterChip(
+                    selected = src.id in enabledSources,
+                    onClick = { onToggleSource(src.id) },
+                    label = { Text(src.name) },
+                )
+            }
+        }
+
+        Text("Custom feeds", style = MaterialTheme.typography.titleSmall)
+        if (customFeeds.isEmpty()) {
+            Text(
+                "Add any RSS or Atom feed URL below.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+        } else {
+            customFeeds.forEach { feed ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        NewsSource.hostLabel(feed),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                    )
+                    IconButton(onClick = { onRemoveFeed(feed) }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Remove feed")
+                    }
+                }
+            }
+        }
+        var newFeed by remember { mutableStateOf("") }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = newFeed,
+                onValueChange = { newFeed = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                label = { Text("Add feed URL") },
+                placeholder = { Text("example.com/rss") },
+            )
+            TextButton(
+                onClick = { onAddFeed(newFeed); newFeed = "" },
+                enabled = newFeed.isNotBlank(),
+            ) { Text("Add") }
+        }
+    }
+}
+
+private fun newsStatusText(s: NewsStatus): String {
+    val updated = s.updatedAtMillis?.let { " · updated ${relativeTime(it)}" } ?: ""
+    return when {
+        s.refreshing -> "Refreshing…"
+        s.message != null -> s.message + updated
+        s.headlineCount == 0 -> "No headlines cached yet."
+        else -> "${s.headlineCount} headlines cached$updated"
+    }
+}
+
+private fun relativeTime(millis: Long): String {
+    val diff = System.currentTimeMillis() - millis
+    return when {
+        diff < 60_000L -> "just now"
+        diff < 3_600_000L -> "${diff / 60_000L} min ago"
+        diff < 86_400_000L -> "${diff / 3_600_000L} h ago"
+        else -> "${diff / 86_400_000L} d ago"
+    }
+}
+
+/**
+ * Normalize a headline's fancy punctuation to the ASCII forms the Morse table
+ * knows, so smart quotes and em-dashes are sent rather than silently dropped.
+ * Anything still unsupported is dropped later by the schedule builder.
+ */
+private fun sanitizeHeadline(title: String): String = title
+    .replace('‘', '\'').replace('’', '\'')  // curly single quotes
+    .replace('“', '"').replace('”', '"')    // curly double quotes
+    .replace('\u2014', '-').replace('\u2013', '-')  // em / en dash
+    .replace('…', ' ')                           // ellipsis
+    .replace(Regex("\\s+"), " ")
+    .trim()
+
 @Composable
 private fun PreviewPane(
     nowPlaying: SessionOrchestrator.NowPlaying,
@@ -860,10 +1084,10 @@ private fun PreviewPane(
                     modifier = Modifier.padding(top = 6.dp),
                 )
             } else {
-                // Previous item sent, dimmed — shown for context so the
+                // Previous item sent, dimmed - shown for context so the
                 // listener can confirm what they just copied.
                 Text(
-                    "Prev · " + (nowPlaying.previous?.text ?: "—"),
+                    "Prev · " + (nowPlaying.previous?.text ?: "-"),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.padding(top = 6.dp),

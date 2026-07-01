@@ -17,10 +17,14 @@ private val CwColorScheme = darkColorScheme(
 
     // Secondary/tertiary stay in the neutral/dimmed-amber family so amber
     // remains the single accent rather than competing with a second hue.
+    // secondaryContainer is the role Material derives "selected" states from
+    // (FilterChip, SegmentedButton, etc.), so we point it at the amber
+    // container here - that makes every selectable control light up amber
+    // when chosen, app-wide, without per-call-site color overrides.
     secondary = AmberDim,
     onSecondary = OnAmber,
-    secondaryContainer = PanelRaised,
-    onSecondaryContainer = Ink,
+    secondaryContainer = AmberContainer,
+    onSecondaryContainer = OnAmberContainer,
     tertiary = InkMuted,
     onTertiary = Charcoal,
     tertiaryContainer = PanelRaised,

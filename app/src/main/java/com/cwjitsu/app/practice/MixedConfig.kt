@@ -36,6 +36,13 @@ data class MixedConfig(
     // enabling the two separate categories.
     val prosignsEnabled: Boolean = true,
     val qcodesEnabled: Boolean = true,
+    // News: which built-in sources are on (by NewsSource id) and any custom
+    // RSS/Atom feed URLs the user added.
+    val enabledNewsSources: Set<String> = DEFAULT_NEWS_SOURCES,
+    val customNewsFeeds: List<String> = emptyList(),
+    // When true, each news headline is sent exactly once, ignoring the global
+    // repetition count - headlines are long, so repeating them is tedious.
+    val newsNoRepeat: Boolean = true,
 ) {
     companion object {
         /** Single source of truth for the default toggle set. */
@@ -55,6 +62,12 @@ data class MixedConfig(
          */
         val DEFAULT_CHARACTER_SET: Set<Char> =
             (Morse.letters + Morse.digits).toSet()
+
+        /**
+         * Default enabled news sources: a couple of reliable wire feeds so the
+         * News category works out of the box once the user turns it on.
+         */
+        val DEFAULT_NEWS_SOURCES: Set<String> = setOf("npr", "bbc")
     }
 }
 

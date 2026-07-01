@@ -29,4 +29,8 @@ data class ContentItem(
     val text: String,
     val spokenAnswer: String? = null,
     val morseOverride: String? = null,
+    // When true, this item ignores the global repetition count and is sent
+    // exactly once. Used for long items (e.g. a news headline) where hearing
+    // the whole thing repeated would be tedious.
+    val singleShot: Boolean = false,
 )

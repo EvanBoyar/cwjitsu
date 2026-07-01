@@ -25,6 +25,7 @@ object ContentMixer {
         characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
         prosignsEnabled: Boolean = true,
         qcodesEnabled: Boolean = true,
+        newsItem: ContentItem? = null,
     ): List<ContentItem> {
         if (enabledKinds.isEmpty()) return emptyList()
         val out = mutableListOf<ContentItem>()
@@ -65,7 +66,7 @@ object ContentMixer {
                     // flags roll independently for each emitted callsign
                     // so the listener hears a mix of bare callsigns,
                     // occasional /prefix, occasional /suffix, and
-                    // rare both — weighted toward "neither" because
+                    // rare both - weighted toward "neither" because
                     // that's how the air actually sounds.
                     for (countryName in callsignCountries.sorted()) {
                         val country = CallsignRegistry.byName(countryName)
@@ -90,8 +91,10 @@ object ContentMixer {
                     }
                 }
                 ContentKind.NEWS -> {
-                    // Placeholder: news headlines from user-selected sources
-                    // will be emitted here in a future release.
+                    // One headline per round, pre-fetched by the caller from
+                    // the offline-first NewsRepository. Null when nothing is
+                    // cached yet (e.g. first run with no connection).
+                    if (newsItem != null) out.add(newsItem)
                 }
             }
         }

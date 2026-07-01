@@ -23,7 +23,7 @@ import java.util.Locale
  * produced a deadlock where the listener installed for utterance N was
  * overwritten before N's [onDone] fired, so the [cont.resume] closure captured
  * for N never got called. The orchestrator would then hang in
- * `SessionOrchestrator.awaitTts` for the lifetime of the practice session —
+ * `SessionOrchestrator.awaitTts` for the lifetime of the practice session -
  * no answer would be spoken, and the courtesy-tone that runs *after* the
  * per-item awaitTts would never be reached.
  *
@@ -157,7 +157,7 @@ class TtsManager(private val context: Context) {
         val safePrefix = utteranceId.replace(Regex("[^A-Za-z0-9_-]"), "_")
         // Unique synthetic id so two consecutive identical user-facing
         // items (e.g. the same callsign back-to-back) get progress
-        // events delivered independently — some engines merge progress
+        // events delivered independently - some engines merge progress
         // across identical ids and only fire onDone once. The UUID
         // suffix is the actual uniqueness guarantee; the caller-supplied
         // id is kept purely as a debugging breadcrumb in case we ever

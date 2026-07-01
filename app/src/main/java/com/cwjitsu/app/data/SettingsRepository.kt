@@ -167,7 +167,7 @@ class SettingsRepository(private val context: Context) {
         o.put("textSource", config.textSource)
         // Independent toggles for occasional host-country /prefix and
         // portable-status /suffix. Older saved configs predate the
-        // split toggle — see the parse side for the migration logic.
+        // split toggle - see the parse side for the migration logic.
         o.put("callsignRandomPrefix", config.callsignRandomPrefix)
         o.put("callsignRandomSuffix", config.callsignRandomSuffix)
         // Selected characters for the Characters category, stored as a plain
@@ -179,6 +179,14 @@ class SettingsRepository(private val context: Context) {
         // Sub-toggles for the combined Prosigns & Q-codes category.
         o.put("prosignsEnabled", config.prosignsEnabled)
         o.put("qcodesEnabled", config.qcodesEnabled)
+        // News source selection.
+        val sources = JSONArray()
+        for (s in config.enabledNewsSources.sorted()) sources.put(s)
+        o.put("enabledNewsSources", sources)
+        val feeds = JSONArray()
+        for (f in config.customNewsFeeds) feeds.put(f)
+        o.put("customNewsFeeds", feeds)
+        o.put("newsNoRepeat", config.newsNoRepeat)
         return o.toString()
     }
 
@@ -212,7 +220,7 @@ class SettingsRepository(private val context: Context) {
         val legacy = if (!hasNewPrefix && !hasNewSuffix) {
             o.optBoolean("callsignRandomDecoration", false)
         } else false
-        // Characters: absent key means a config saved before this feature —
+        // Characters: absent key means a config saved before this feature -
         // fall back to the default (letters + digits) so existing users keep
         // the previous behavior. A present-but-empty string is honored as a
         // deliberate "no characters" choice.
@@ -234,6 +242,17 @@ class SettingsRepository(private val context: Context) {
             hasLegacyProsigns || hasLegacyQcodes -> hasLegacyQcodes
             else -> true
         }
+        // News sources: absent means a pre-News config - seed the defaults.
+        val enabledNewsSources = if (o.has("enabledNewsSources")) {
+            val a = o.optJSONArray("enabledNewsSources") ?: JSONArray()
+            (0 until a.length()).mapNotNull { a.optString(it).takeIf { s -> s.isNotEmpty() } }.toSet()
+        } else {
+            MixedConfig.DEFAULT_NEWS_SOURCES
+        }
+        val customFeedsArr = o.optJSONArray("customNewsFeeds") ?: JSONArray()
+        val customNewsFeeds = (0 until customFeedsArr.length())
+            .mapNotNull { customFeedsArr.optString(it).takeIf { s -> s.isNotEmpty() } }
+        val newsNoRepeat = o.optBoolean("newsNoRepeat", true)
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -251,6 +270,9 @@ class SettingsRepository(private val context: Context) {
             characterSet = characterSet,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,
+            enabledNewsSources = enabledNewsSources,
+            customNewsFeeds = customNewsFeeds,
+            newsNoRepeat = newsNoRepeat,
         )
     }
 }

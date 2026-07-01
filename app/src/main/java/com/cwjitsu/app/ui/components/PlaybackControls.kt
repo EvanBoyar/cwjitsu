@@ -8,48 +8,73 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
- * Compact play / stop button used at the bottom of the Home screen.
+ * Play / stop control at the bottom of the Home screen, with a Skip button
+ * that appears while a session is running.
  *
- * The button shows a stop icon and "Stop" label while [isRunning] is true
- * (clicking it stops the session), otherwise a play icon and "Play" label.
+ * The main button shows a stop icon and "Stop" while [isRunning] is true
+ * (clicking it stops the session), otherwise a play icon and "Play". The
+ * Skip button jumps to the next item (useful for long news headlines).
  */
 @Composable
 fun PlaybackControls(
     isRunning: Boolean,
     onPlay: () -> Unit,
     onStop: () -> Unit,
+    onSkip: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Button(
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(56.dp)
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        onClick = { if (isRunning) onStop() else onPlay() },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = if (isRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 8.dp),
+        Button(
+            modifier = Modifier.weight(1f).height(56.dp),
+            onClick = { if (isRunning) onStop() else onPlay() },
         ) {
+            Icon(
+                imageVector = if (isRunning) Icons.Filled.Stop
+                              else Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+            )
             Text(
                 text = if (isRunning) "Stop" else "Play",
                 style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(start = 8.dp),
             )
+        }
+        if (isRunning) {
+            FilledTonalButton(
+                onClick = onSkip,
+                modifier = Modifier.height(56.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.SkipNext,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                )
+                Text(
+                    text = "Skip",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
         }
     }
 }

@@ -81,13 +81,17 @@ fun ConfigPanel(
             enabled = farnsOn,
         )
 
+        // Shown as a repeat count: 0 means "sent once, not repeated". The
+        // stored `repetitions` is the play count (always >= 1), so the slider
+        // maps display = plays - 1 and stores value + 1. This keeps existing
+        // behaviour unchanged while letting the setting bottom out at 0.
         LabeledSlider(
             label = "Repetitions",
-            value = config.repetitions.toFloat(),
-            valueRange = 1f..20f,
+            value = (config.repetitions - 1).toFloat(),
+            valueRange = 0f..19f,
             steps = 18,
-            valueLabel = "${config.repetitions}",
-            onValueChange = { onConfigChange(config.copy(repetitions = it.toInt())) },
+            valueLabel = "${config.repetitions - 1}",
+            onValueChange = { onConfigChange(config.copy(repetitions = it.toInt() + 1)) },
         )
 
         LabeledSlider(
@@ -115,7 +119,7 @@ fun ConfigPanel(
         )
 
         // One-shot replay of the code after the spoken answer. The
-        // replay is NOT a repetition — it is a single extra send so the
+        // replay is NOT a repetition - it is a single extra send so the
         // listener can catch a code they missed on the first listening
         // pass.
         ToggleRow(

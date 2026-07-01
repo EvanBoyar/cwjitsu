@@ -197,7 +197,7 @@ class CwAudioEngine(
 
             if (localWrite > maxSamples + sampleRate) break
         }
-        // Only flip state if WE are still the current worker — otherwise
+        // Only flip state if WE are still the current worker - otherwise
         // a brand-new worker has already taken over and we'd yank its
         // PLAYING state back to STOPPED, briefly silencing the new
         // playback (this is what made the courtesy tone vanish
@@ -215,7 +215,7 @@ class CwAudioEngine(
             // Bumped from 200ms to 500ms: a real device can take a few
             // hundred ms to drain a full 1024-sample blocking write on
             // a busy I/O scheduler, and stopping too early left the
-            // worker alive with state still PLAYING — which silently
+            // worker alive with state still PLAYING - which silently
             // skipped the courtesy tone on the next play() call.
             try { it.join(500) } catch (_: InterruptedException) {}
         }

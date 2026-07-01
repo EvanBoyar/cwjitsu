@@ -8,7 +8,7 @@ import com.cwjitsu.app.ui.screens.HomeScreen
 import com.cwjitsu.app.ui.screens.SettingsScreen
 
 /**
- * Nav graph. The Home screen is the single point of entry — it hosts the
+ * Nav graph. The Home screen is the single point of entry - it hosts the
  * category toggles, per-category settings (countries, source text), and
  * playback. Settings is a sibling screen for global configuration.
  */

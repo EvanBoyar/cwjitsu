@@ -107,20 +107,29 @@ class ScheduleBuilder(
                 )
                 return
             }
-            val letters = item.text.uppercase().mapNotNull(Morse::codeFor)
-            if (letters.isEmpty()) return
-            for ((li, letterMorse) in letters.withIndex()) {
-                val isLast = li == letters.lastIndex
-                emitLetterMorse(
-                    letterMorse,
-                    label = label,
-                    addTrailingIntra = !isLast,
-                    itemFreq = itemFreq,
-                )
-                if (!isLast) {
-                    // Replace the last intra-gap with the inter-character gap.
-                    cursor += charGapSamples - intraGapSamples
+            // Split on whitespace so multi-word items (e.g. a news headline)
+            // get real inter-word gaps. Single-word items (letters, callsigns,
+            // words) have exactly one chunk here, so their timing is unchanged.
+            val words = item.text.uppercase()
+                .split(Regex("\\s+"))
+                .map { it.mapNotNull(Morse::codeFor) }
+                .filter { it.isNotEmpty() }
+            if (words.isEmpty()) return
+            for ((wi, letters) in words.withIndex()) {
+                for ((li, letterMorse) in letters.withIndex()) {
+                    val isLast = li == letters.lastIndex
+                    emitLetterMorse(
+                        letterMorse,
+                        label = label,
+                        addTrailingIntra = !isLast,
+                        itemFreq = itemFreq,
+                    )
+                    if (!isLast) {
+                        // Replace the last intra-gap with the inter-character gap.
+                        cursor += charGapSamples - intraGapSamples
+                    }
                 }
+                if (wi < words.lastIndex) cursor += wordGapSamples
             }
         }
 
@@ -156,7 +165,7 @@ class ScheduleBuilder(
 
     /**
      * Apply sloppy-mode jitter to an individual element duration (a dot or
-     * a dash). +/-30% makes the rhythm obviously loose — +/-10% reads as
+     * a dash). +/-30% makes the rhythm obviously loose - +/-10% reads as
      * machine-clean to the human ear. Returns at least 1 sample so the
      * audio engine never receives a zero-length event.
      */
