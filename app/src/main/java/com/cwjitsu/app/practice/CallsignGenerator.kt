@@ -3,17 +3,36 @@ package com.cwjitsu.app.practice
 import kotlin.random.Random
 
 /**
+ * Independent roll probability for adding a "/prefix" or "/suffix" to a
+ * callsign when [CallsignGenerator.next] / [batch] is asked for random
+ * decoration. Each element is rolled independently at this rate, so the
+ * distribution is:
+ *   - ~56% neither
+ *   - ~19% prefix only
+ *   - ~19% suffix only
+ *   -  ~6% both
+ * This is the "more commonly neither" shape the user asked for. Tuned to
+ * 25% per element rather than 50% so that plain callsigns remain the
+ * default on the air and the listener hears decoration as the less
+ * common case instead of half the time.
+ */
+private const val RANDOM_DECORATION_PROBABILITY = 0.25f
+
+/**
  * Generates callsigns by picking a [CallsignTemplate] from a country and emitting
  * prefix + digit + suffix.
  *
- * The optional [formatPrefix] and [formatSuffix] are stitched around the
- * core callsign. `null` or empty strings are treated as "no decoration"
- * so the default behaviour is unchanged. For example, with prefix "W1/"
- * and suffix "/P" the output for a US callsign would be "W1/AB4CD/P".
- *
- * ITU Generic with an empty prefix will produce bare digit+letter calls,
- * which is fine for warm-ups that simulate "anything you might hear from
- * anywhere".
+ * Three mutation modes:
+ *   1. No decoration — pass `null` or empty for [formatPrefix] / [formatSuffix]
+ *      and leave [randomDecoration] false (default).
+ *   2. Fixed decoration — pass specific strings for [formatPrefix] /
+ *      [formatSuffix]; they are stitched around the core callsign every
+ *      time. `null` or empty means "no decoration" on that side.
+ *   3. Occasional random decoration — set [randomDecoration] = true and
+ *      [formatPrefix] / [formatSuffix] are ignored. Each call rolls
+ *      [RANDOM_DECORATION_PROBABILITY] independently for prefix and
+ *      suffix, weighted toward "neither", so the user hears mostly bare
+ *      callsigns with an occasional /prefix, /suffix, or both.
  */
 class CallsignGenerator(private val random: Random = Random.Default) {
 
@@ -21,7 +40,27 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         country: CallsignCountry,
         formatPrefix: String? = null,
         formatSuffix: String? = null,
+        randomDecoration: Boolean = false,
     ): String {
+        // Resolve effective prefix/suffix for this single call. When
+        // randomDecoration is on, each side is independently rolled and a
+        // non-null option is sampled from the registry lists — the null
+        // entries are dropped so we never accidentally pick "no prefix"
+        // as if it were a value (which would just produce a bare
+        // callsign anyway, but doing it explicitly keeps the intent
+        // clear).
+        val effectivePrefix: String? = if (randomDecoration) {
+            if (random.nextFloat() < RANDOM_DECORATION_PROBABILITY) {
+                CALLSIGN_PREFIX_OPTIONS.filterNotNull().random(random)
+            } else null
+        } else formatPrefix
+
+        val effectiveSuffix: String? = if (randomDecoration) {
+            if (random.nextFloat() < RANDOM_DECORATION_PROBABILITY) {
+                CALLSIGN_SUFFIX_OPTIONS.filterNotNull().random(random)
+            } else null
+        } else formatSuffix
+
         val tpl = country.templates.random(random)
         val digit = randomDigit()
         val suffixLen = if (tpl.suffixRange.first == tpl.suffixRange.last)
@@ -30,9 +69,9 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         val suffix = (1..suffixLen).map { randomChar() }.joinToString("")
         val coreCall = tpl.prefix + digit + suffix
         return buildString {
-            if (!formatPrefix.isNullOrEmpty()) append(formatPrefix)
+            if (!effectivePrefix.isNullOrEmpty()) append(effectivePrefix)
             append(coreCall)
-            if (!formatSuffix.isNullOrEmpty()) append(formatSuffix)
+            if (!effectiveSuffix.isNullOrEmpty()) append(effectiveSuffix)
         }
     }
 
@@ -41,7 +80,10 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         country: CallsignCountry,
         formatPrefix: String? = null,
         formatSuffix: String? = null,
-    ): List<String> = List(count) { next(country, formatPrefix, formatSuffix) }
+        randomDecoration: Boolean = false,
+    ): List<String> = List(count) {
+        next(country, formatPrefix, formatSuffix, randomDecoration)
+    }
 
     private fun randomChar(): Char = ('A'..'Z').random(random)
     private fun randomDigit(): Char = ('0'..'9').random(random)

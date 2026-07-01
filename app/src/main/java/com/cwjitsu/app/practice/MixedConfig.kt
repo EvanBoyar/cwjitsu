@@ -13,21 +13,19 @@ package com.cwjitsu.app.practice
  *
  * [textSource] is the user's free-text input used when TEXT is enabled.
  *
- * [callsignPrefix] is an optional string prepended to every generated
- * callsign (e.g. "W1/") to simulate a host-country / regional indicator
- * used when an operator is portable in another call area. `null` or empty
- * means "no prefix".
- *
- * [callsignSuffix] is an optional string appended to every generated
- * callsign (e.g. "/P", "/M", "/MM", "/QRP") to indicate portable / mobile /
- * maritime-mobile / low-power operation. `null` or empty means "no suffix".
+ * [callsignRandomDecoration] when true, each generated callsign is
+ * independently rolled for an optional '/' prefix and '/' suffix. The
+ * roll is biased toward "no decoration" — on average the listener hears
+ * a plain callsign most of the time, occasionally a host-country
+ * "/prefix", occasionally a portable-status "/suffix", and rarely both.
+ * Mirrors what you'd hear on the air where every other operator is
+ * running portable from somewhere else.
  */
 data class MixedConfig(
     val enabledKinds: Set<ContentKind> = DEFAULT_KINDS,
     val callsignCountries: Set<String> = DEFAULT_COUNTRIES,
     val textSource: String = "",
-    val callsignPrefix: String? = DEFAULT_CALLSIGN_PREFIX,
-    val callsignSuffix: String? = DEFAULT_CALLSIGN_SUFFIX,
+    val callsignRandomDecoration: Boolean = false,
 ) {
     companion object {
         /** Single source of truth for the default toggle set. */
@@ -38,12 +36,6 @@ data class MixedConfig(
 
         /** Default country selection: USA. */
         val DEFAULT_COUNTRIES: Set<String> = setOf("United States")
-
-        /** No '/' prefix by default. */
-        val DEFAULT_CALLSIGN_PREFIX: String? = null
-
-        /** No '/' suffix by default. */
-        val DEFAULT_CALLSIGN_SUFFIX: String? = null
     }
 }
 

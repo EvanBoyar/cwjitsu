@@ -20,8 +20,7 @@ object ContentMixer {
         nato: Boolean = true,
         callsignCountries: Set<String> = MixedConfig.DEFAULT_COUNTRIES,
         textSource: String = "",
-        callsignPrefix: String? = MixedConfig.DEFAULT_CALLSIGN_PREFIX,
-        callsignSuffix: String? = MixedConfig.DEFAULT_CALLSIGN_SUFFIX,
+        callsignRandomDecoration: Boolean = false,
     ): List<ContentItem> {
         if (enabledKinds.isEmpty()) return emptyList()
         val out = mutableListOf<ContentItem>()
@@ -49,10 +48,12 @@ object ContentMixer {
                 ContentKind.CALLSIGNS -> {
                     if (callsignCountries.isEmpty()) continue
                     // One callsign per selected country per round, in
-                    // sorted (deterministic) order. The optional
-                    // prefix / suffix from the user's MixedConfig are
-                    // stitched around the core callsign by the
-                    // generator (e.g. "W1/AB4CD" or "AB4CD/P").
+                    // sorted (deterministic) order. When random decoration
+                    // is enabled, the generator rolls independently for
+                    // each emitted callsign so the listener hears a mix
+                    // of bare callsigns, occasional /prefix, occasional
+                    // /suffix, and rare both — weighted toward "neither"
+                    // because that's how the air actually sounds.
                     for (countryName in callsignCountries.sorted()) {
                         val country = CallsignRegistry.byName(countryName)
                             ?: CallsignRegistry.countries.first()
@@ -60,8 +61,7 @@ object ContentMixer {
                             CallsignGenerator().batch(
                                 count = 1,
                                 country = country,
-                                formatPrefix = callsignPrefix,
-                                formatSuffix = callsignSuffix,
+                                randomDecoration = callsignRandomDecoration,
                             ).map { callsign ->
                                 ContentItem(
                                     text = callsign,

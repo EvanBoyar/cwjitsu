@@ -168,8 +168,7 @@ class SettingsRepository(private val context: Context) {
         // An empty string is the on-disk representation of "no decoration"
         // and round-trips to `null` in [MixedConfig]. Older saved configs
         // predate these keys, so we always write them explicitly.
-        o.put("callsignPrefix", config.callsignPrefix ?: "")
-        o.put("callsignSuffix", config.callsignSuffix ?: "")
+        o.put("callsignRandomDecoration", config.callsignRandomDecoration)
         return o.toString()
     }
 
@@ -186,10 +185,6 @@ class SettingsRepository(private val context: Context) {
             .mapNotNull { i -> countriesArr.optString(i).takeIf { it.isNotEmpty() } }
             .toSet()
         val text = o.optString("textSource")
-        // An empty or missing string is the on-disk representation of
-        // "no prefix / no suffix" and maps to `null` in [MixedConfig].
-        val prefix = o.optString("callsignPrefix", "").ifEmpty { null }
-        val suffix = o.optString("callsignSuffix", "").ifEmpty { null }
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -198,8 +193,12 @@ class SettingsRepository(private val context: Context) {
             enabledKinds = kinds,
             callsignCountries = countries,
             textSource = text,
-            callsignPrefix = prefix,
-            callsignSuffix = suffix,
+            // Schema change from a previous (now-removed) prefix/suffix
+            // string pair to a single random-decoration toggle. Old
+            // saved prefs are read cleanly — optBoolean returns its
+            // second argument as the fallback when the key is absent,
+            // so existing users default to "off" here.
+            callsignRandomDecoration = o.optBoolean("callsignRandomDecoration", false),
         )
     }
 }

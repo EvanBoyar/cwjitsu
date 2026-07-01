@@ -55,6 +55,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,8 +79,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cwjitsu.app.CWJitsuApp
 import com.cwjitsu.app.R
 import com.cwjitsu.app.data.WordDictionary
-import com.cwjitsu.app.practice.CALLSIGN_PREFIX_OPTIONS
-import com.cwjitsu.app.practice.CALLSIGN_SUFFIX_OPTIONS
 import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.ContentItem
@@ -88,8 +87,6 @@ import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
-import com.cwjitsu.app.practice.formatCallsignPrefixLabel
-import com.cwjitsu.app.practice.formatCallsignSuffixLabel
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
 import com.cwjitsu.app.ui.components.PlaybackControls
@@ -164,15 +161,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
-    fun setCallsignPrefix(prefix: String?) {
+    fun setCallsignRandomDecoration(enabled: Boolean) {
         scope.launch {
-            app.settings.updateMixedConfig { it.copy(callsignPrefix = prefix) }
-        }
-    }
-
-    fun setCallsignSuffix(suffix: String?) {
-        scope.launch {
-            app.settings.updateMixedConfig { it.copy(callsignSuffix = suffix) }
+            app.settings.updateMixedConfig { it.copy(callsignRandomDecoration = enabled) }
         }
     }
 
@@ -186,8 +177,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
             textSource = current.textSource,
-            callsignPrefix = current.callsignPrefix,
-            callsignSuffix = current.callsignSuffix,
+            callsignRandomDecoration = current.callsignRandomDecoration,
         )
     }
 
@@ -390,33 +380,37 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     )
                 }
 
+                // Decoration is now a single toggle: when on, each emitted
+                // callsign is independently rolled for an optional /prefix
+                // and /suffix — biased toward "neither" so the listener
+                // hears mostly plain callsigns. Replaces the previous
+                // /prefix and /suffix dropdowns, which forced the user to
+                // pick a single value applied to every callsign.
+                //
+                // Inlined here (rather than reusing ToggleRow from
+                // ConfigPanel) so HomeScreen stays self-contained and does
+                // not have to know about / import a private composable
+                // from a sibling package.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Random /prefix or /suffix (occasionally)",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Switch(
+                        checked = effectiveConfig.callsignRandomDecoration,
+                        onCheckedChange = { setCallsignRandomDecoration(it) },
+                    )
+                }
                 Text(
-                    "Decorative / prefix and suffix (e.g. W1/, /P)",
+                    "When on, most callsigns stay plain, but the generator occasionally adds a /prefix (host indicator), a /suffix (portable status), or rarely both.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = 4.dp),
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    CallsignFormatDropdown(
-                        modifier = Modifier.weight(1f),
-                        label = "/ Prefix",
-                        options = CALLSIGN_PREFIX_OPTIONS,
-                        selected = effectiveConfig.callsignPrefix,
-                        optionLabel = { formatCallsignPrefixLabel(it) },
-                        onSelected = { setCallsignPrefix(it) },
-                    )
-                    CallsignFormatDropdown(
-                        modifier = Modifier.weight(1f),
-                        label = "Suffix /",
-                        options = CALLSIGN_SUFFIX_OPTIONS,
-                        selected = effectiveConfig.callsignSuffix,
-                        optionLabel = { formatCallsignSuffixLabel(it) },
-                        onSelected = { setCallsignSuffix(it) },
-                    )
-                }
 
                 if (showCountryDialog) {
                     CountryManagerDialog(
