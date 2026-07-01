@@ -3,6 +3,7 @@ package com.cwjitsu.app.service
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import java.util.Locale
 
 /**
@@ -50,6 +51,10 @@ import java.util.Locale
  */
 class TtsManager(private val context: Context) {
 
+    companion object {
+        private const val TAG = "CWJitsu/TtsManager"
+    }
+
     private var tts: TextToSpeech? = null
     @Volatile private var ready: Boolean = false
     @Volatile private var initFailed: Boolean = false
@@ -65,35 +70,45 @@ class TtsManager(private val context: Context) {
     @Synchronized
     fun init() {
         if (tts != null) return
+        Log.d(TAG, "init() creating TextToSpeech")
         tts = TextToSpeech(context.applicationContext) { status ->
             synchronized(this) {
                 if (status == TextToSpeech.SUCCESS) {
                     ready = true
                     tts?.language = Locale.US
+                    Log.d(TAG, "init TextToSpeech SUCCESS")
                     // Install the listener EXACTLY once. Earlier versions
                     // installed a fresh listener inside speak(); that made
                     // every queued continuation race against the listener
                     // for the *next* utterance, eventually orphaning
                     // callback closures and deadlocking the orchestrator.
                     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {}
+                        override fun onStart(utteranceId: String?) {
+                            Log.d(TAG, "onStart id=$utteranceId activeId=$activeId")
+                        }
                         override fun onDone(utteranceId: String?) {
+                            Log.d(TAG, "onDone id=$utteranceId activeId=$activeId")
                             resolveIfActive(utteranceId, ok = true)
                         }
                         @Deprecated("Deprecated in Java")
                         override fun onError(utteranceId: String?) {
+                            Log.d(TAG, "onError id=$utteranceId activeId=$activeId")
                             resolveIfActive(utteranceId, ok = false)
                         }
                         override fun onError(utteranceId: String?, errorCode: Int) {
+                            Log.d(TAG, "onError id=$utteranceId code=$errorCode activeId=$activeId")
                             resolveIfActive(utteranceId, ok = false)
                         }
                         private fun resolveIfActive(id: String?, ok: Boolean) {
                             synchronized(this@TtsManager) {
                                 if (id == activeId) {
+                                    Log.d(TAG, "resolveIfActive MATCH id=$id ok=$ok")
                                     val cb = activeCallback
                                     activeCallback = null
                                     activeId = null
                                     cb?.invoke(ok)
+                                } else {
+                                    Log.d(TAG, "resolveIfActive SKIP id=$id activeId=$activeId")
                                 }
                             }
                         }
@@ -103,6 +118,7 @@ class TtsManager(private val context: Context) {
                     drain.forEach { it() }
                 } else {
                     initFailed = true
+                    Log.w(TAG, "init TextToSpeech FAIL status=$status")
                     // Drain pending callers with no work to do; speak() will
                     // short-circuit with onDone(false) once they retry.
                     pendingCallbacks.clear()
@@ -122,9 +138,10 @@ class TtsManager(private val context: Context) {
     }
 
     fun speak(text: String, utteranceId: String, onDone: (Boolean) -> Unit) {
-        if (initFailed) { onDone(false); return }
-        val engine = tts ?: run { onDone(false); return }
+        if (initFailed) { Log.w(TAG, "speak DROP initFailed text=$text id=$utteranceId"); onDone(false); return }
+        val engine = tts ?: run { Log.w(TAG, "speak DROP tts==null text=$text id=$utteranceId"); onDone(false); return }
         if (!ready) {
+            Log.d(TAG, "speak QUEUED not-ready text=$text id=$utteranceId")
             whenReady { speak(text, utteranceId, onDone) }
             return
         }
@@ -146,6 +163,7 @@ class TtsManager(private val context: Context) {
         // id is kept purely as a debugging breadcrumb in case we ever
         // need to grep logs for which item triggered a deadlock.
         val uniqueId = "$safePrefix\u00b7${java.util.UUID.randomUUID()}"
+        Log.d(TAG, "speak ENTER text='${text.take(80)}' id=$uniqueId (orig=$utteranceId)")
         synchronized(this) {
             activeCallback = onDone
             activeId = uniqueId
@@ -158,7 +176,9 @@ class TtsManager(private val context: Context) {
         // forever. Resolve the callback ourselves so the orchestrator
         // progresses even in the synchronous-error case.
         val status = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, uniqueId)
+        Log.d(TAG, "speak engine.speak returned $status id=$uniqueId")
         if (status == TextToSpeech.ERROR) {
+            Log.w(TAG, "speak synchronous ERROR, resolving callback id=$uniqueId")
             synchronized(this) {
                 if (uniqueId == activeId) {
                     val cb = activeCallback
@@ -173,6 +193,7 @@ class TtsManager(private val context: Context) {
     fun stop() {
         // Drain any in-flight callback so a coroutine awaiting this
         // utterance is released (with ok=false) rather than hanging.
+        Log.d(TAG, "stop draining activeCallback activeId=$activeId")
         synchronized(this) {
             val cb = activeCallback
             activeCallback = null

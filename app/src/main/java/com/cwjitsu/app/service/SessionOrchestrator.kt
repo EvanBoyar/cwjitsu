@@ -1,5 +1,6 @@
 package com.cwjitsu.app.service
 
+import android.util.Log
 import com.cwjitsu.app.audio.CwAudioEngine
 import com.cwjitsu.app.audio.Schedule
 import com.cwjitsu.app.audio.ScheduleBuilder
@@ -36,6 +37,9 @@ class SessionOrchestrator(
     private val tts: TtsManager,
     private val scope: CoroutineScope,
 ) {
+    companion object {
+        private const val TAG = "CWJitsu/Orch"
+    }
 
     enum class RunnerState { IDLE, RUNNING, FINISHED, STOPPED }
 
@@ -49,11 +53,13 @@ class SessionOrchestrator(
 
     fun start(regenerator: ContentRegenerator, config: PracticeConfig) {
         stop()
+        Log.d(TAG, "start regenerator")
         job = scope.launch(Dispatchers.Default) {
             _state.value = RunnerState.RUNNING
             try {
             while (isActive) {
                 val items = regenerator(config)
+                Log.d(TAG, "round items.size=${items.size}")
                 if (items.isEmpty()) {
                     // Nothing to play right now (e.g. all categories are
                     // deselected, or Call Signs is on with no countries).
@@ -71,7 +77,11 @@ class SessionOrchestrator(
                 _state.value = RunnerState.FINISHED
             } catch (e: CancellationException) {
                 _state.value = RunnerState.STOPPED
+                Log.d(TAG, "start CANCELLED")
                 throw e
+            } catch (t: Throwable) {
+                Log.e(TAG, "start FATAL uncaught", t)
+                _state.value = RunnerState.STOPPED
             }
         }
     }
@@ -87,12 +97,15 @@ class SessionOrchestrator(
         val sampleRate = engine.sampleRate
         val builder = ScheduleBuilder(sampleRate)
         val reps = config.repetitions.coerceAtLeast(1)
+        Log.d(TAG, "playBatch ENTER items=${items.size} reps=$reps answers=${config.answerEnabled} courtesy=${config.courtesyToneEnabled}")
 
-        for (item in items) {
+        for ((idx, item) in items.withIndex()) {
+            Log.d(TAG, "playBatch item[$idx] text='${item.text}' spoken='${item.spokenAnswer}'")
             val morse = item.morseOverride
                 ?: item.text.uppercase()
                     .mapNotNull(Morse::codeFor)
                     .joinToString("")
+            Log.d(TAG, "playBatch item[$idx] morse='${morse.take(80)}' isBlank=${morse.isBlank()}")
             if (morse.isBlank()) continue
 
             val batchForRep = List(reps) { item }
@@ -105,8 +118,28 @@ class SessionOrchestrator(
 
             if (config.answerEnabled) {
                 delay(config.answerDelayMs)
-                val answer = item.spokenAnswer ?: item.text
-                awaitTts(answer, item.text)
+                // Sanitize the spoken text before it reaches the TTS
+                // engine. The platform TextToSpeech implementation on
+                // many devices (Google TTS on stock Android, Samsung
+                // TTS, eSpeak) treats `/` as a sentence boundary — it
+                // silences the character entirely AND splits the
+                // utterance into multiple chunks, firing an early
+                // `onDone` for the FIRST prefix chunk. The orchestrator
+                // would then resume `awaitTts` and immediately move on
+                // to the post-batch courtesy tone while the TTS engine
+                // was still speaking the suffix of the callsign;
+                // Android's audio-focus ducking suppressed that 100 ms
+                // pip entirely, making the courtesy tone vanish for
+                // every decorated callsign. Replacing `/` with the
+                // spoken word "stroke" wraps the boundary in plain
+                // English so the engine treats it as a single spoken
+                // sentence and fires `onDone` only when the whole
+                // answer is finished.
+                val rawAnswer = item.spokenAnswer ?: item.text
+                val answer = rawAnswer.replace("/", " stroke ")
+                Log.d(TAG, "playBatch item[$idx] awaitTts ENTER answer='${answer.take(80)}' id='${item.text}'")
+                val ok = awaitTts(answer, item.text)
+                Log.d(TAG, "playBatch item[$idx] awaitTts RETURN ok=$ok")
 
                 // Optional one-shot replay of the same code, never
                 // counted as a repetition. Useful for catching a code
@@ -120,13 +153,18 @@ class SessionOrchestrator(
                 }
             }
         }
+        Log.d(TAG, "playBatch EXIT for-loop, courtesy=${config.courtesyToneEnabled}")
 
         // Courtesy tone: short tone played once after the whole batch
         // answers have finished, like a real repeater's "dit" at the
         // end of a sequence. Disabled by config. Always uses the
         // currently tuned frequency so it matches the practice tone.
         if (config.courtesyToneEnabled) {
+            Log.d(TAG, "playCourtesyTone ENTER")
             playCourtesyTone(config)
+            Log.d(TAG, "playCourtesyTone EXIT")
+        } else {
+            Log.d(TAG, "playCourtesyTone SKIPPED disabled")
         }
     }
 
@@ -171,7 +209,9 @@ class SessionOrchestrator(
         )
         engine.setSchedule(courtesy, config)
         engine.play()
+        Log.d(TAG, "playCourtesyTone waitForAudio ENTER totalSamples=${courtesy.totalSamples}")
         waitForAudioToFinish(courtesy.totalSamples)
+        Log.d(TAG, "playCourtesyTone waitForAudio RETURN")
         // Brief settling pause so the next batch's first element doesn't
         // butt up against the courtesy tone's envelope tail.
         delay(80)
@@ -179,10 +219,14 @@ class SessionOrchestrator(
 
     private suspend fun waitForAudioToFinish(totalSamples: Int) {
         val budgetSamples = totalSamples + engine.sampleRate
+        var iters = 0
         while (engine.state.value == CwAudioEngine.State.PLAYING ||
             engine.state.value == CwAudioEngine.State.PAUSED
         ) {
             if (engine.elapsedSamples() >= budgetSamples) return
+            if (++iters % 200 == 0) {
+                Log.d(TAG, "waitForAudio iters=$iters state=${engine.state.value} elapsed=${engine.elapsedSamples()}/$budgetSamples")
+            }
             yield()
         }
     }
