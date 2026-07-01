@@ -2,12 +2,14 @@ package com.cwjitsu.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,15 +18,22 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.MergeType
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.QuestionAnswer
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.TextFields
@@ -33,21 +42,30 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +78,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cwjitsu.app.CWJitsuApp
 import com.cwjitsu.app.R
 import com.cwjitsu.app.data.WordDictionary
+import com.cwjitsu.app.practice.CALLSIGN_PREFIX_OPTIONS
+import com.cwjitsu.app.practice.CALLSIGN_SUFFIX_OPTIONS
+import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.ContentItem
 import com.cwjitsu.app.practice.ContentKind
@@ -67,6 +88,8 @@ import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
+import com.cwjitsu.app.practice.formatCallsignPrefixLabel
+import com.cwjitsu.app.practice.formatCallsignSuffixLabel
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
 import com.cwjitsu.app.ui.components.PlaybackControls
@@ -135,6 +158,24 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    fun setCountries(countries: Set<String>) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(callsignCountries = countries) }
+        }
+    }
+
+    fun setCallsignPrefix(prefix: String?) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(callsignPrefix = prefix) }
+        }
+    }
+
+    fun setCallsignSuffix(suffix: String?) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(callsignSuffix = suffix) }
+        }
+    }
+
     val regenerator: ContentRegenerator = { cfg ->
         val current = app.settings.mixedConfigFlow.first() ?: MixedConfig()
         val words = WordDictionary.get(app)
@@ -145,6 +186,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
             textSource = current.textSource,
+            callsignPrefix = current.callsignPrefix,
+            callsignSuffix = current.callsignSuffix,
         )
     }
 
@@ -280,30 +323,109 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 }
             }
 
-            // Per-category settings: countries (multi-select) for CALLSIGNS.
+            // Per-category settings: regions + /prefix + /suffix for CALLSIGNS.
+            // With ~130 countries in the registry the full chip list is too
+            // long to render inline, so the inline area shows a compact
+            // summary + quick-pick chips for the most common choices
+            // (US and Canada) + a Manage button that opens a full-screen
+            // dialog with search and continent grouping.
             if (ContentKind.CALLSIGNS in effectiveConfig.enabledKinds) {
+                var showCountryDialog by remember { mutableStateOf(false) }
+
                 Text(
-                    "Callsigns countries",
+                    "Callsigns regions",
                     style = MaterialTheme.typography.titleMedium,
                 )
-                Text(
-                    "Tap to select which countries' callsigns to drill on.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                )
+
+                // Summary + Manage button. We also surface the first few selected
+                // country names here so the user can see at a glance which
+                // regions are active without opening the dialog.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    val count = effectiveConfig.callsignCountries.size
+                    Text(
+                        text = "$count ${if (count == 1) "country" else "countries"} selected",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                    TextButton(onClick = { showCountryDialog = true }) {
+                        Text("Manage all")
+                    }
+                }
+                if (effectiveConfig.callsignCountries.isNotEmpty()) {
+                    val names = effectiveConfig.callsignCountries.sorted()
+                    val previewCount = 3
+                    val preview = names.take(previewCount)
+                    val overflow = names.size - previewCount
+                    Text(
+                        text = buildString {
+                            append(preview.joinToString(", "))
+                            if (overflow > 0) append("  +$overflow more")
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                }
+
+                // Quick-pick chips for the most common regions so the user
+                // can drill on USA / Canada with one tap without opening
+                // the dialog.
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    for (country in CallsignRegistry.names()) {
-                        val selected = country in effectiveConfig.callsignCountries
-                        FilterChip(
-                            selected = selected,
-                            onClick = { toggleCountry(country) },
-                            label = { Text(country) },
-                        )
-                    }
+                    FilterChip(
+                        selected = "United States" in effectiveConfig.callsignCountries,
+                        onClick = { toggleCountry("United States") },
+                        label = { Text("United States") },
+                    )
+                    FilterChip(
+                        selected = "Canada" in effectiveConfig.callsignCountries,
+                        onClick = { toggleCountry("Canada") },
+                        label = { Text("Canada") },
+                    )
+                }
+
+                Text(
+                    "Decorative / prefix and suffix (e.g. W1/, /P)",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CallsignFormatDropdown(
+                        modifier = Modifier.weight(1f),
+                        label = "/ Prefix",
+                        options = CALLSIGN_PREFIX_OPTIONS,
+                        selected = effectiveConfig.callsignPrefix,
+                        optionLabel = { formatCallsignPrefixLabel(it) },
+                        onSelected = { setCallsignPrefix(it) },
+                    )
+                    CallsignFormatDropdown(
+                        modifier = Modifier.weight(1f),
+                        label = "Suffix /",
+                        options = CALLSIGN_SUFFIX_OPTIONS,
+                        selected = effectiveConfig.callsignSuffix,
+                        optionLabel = { formatCallsignSuffixLabel(it) },
+                        onSelected = { setCallsignSuffix(it) },
+                    )
+                }
+
+                if (showCountryDialog) {
+                    CountryManagerDialog(
+                        selectedCountries = effectiveConfig.callsignCountries,
+                        onToggleCountry = { toggleCountry(it) },
+                        onClear = { setCountries(emptySet()) },
+                        onSelectAll = { setCountries(CallsignRegistry.names().toSet()) },
+                        onDismiss = { showCountryDialog = false },
+                    )
                 }
             }
 
@@ -477,6 +599,218 @@ private fun PreviewPane(items: List<ContentItem>) {
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Read-only dropdown used to pick a '/' prefix or suffix option for
+ * generated callsigns. The first option is always `null` (rendered as
+ * "None") which means "do not add this decoration".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CallsignFormatDropdown(
+    label: String,
+    options: List<String?>,
+    selected: String?,
+    optionLabel: (String?) -> String,
+    onSelected: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = optionLabel(selected),
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text(label) },
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+            },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            for (option in options) {
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Full-screen dialog that lets the user search, browse, and toggle
+ * countries. Grouped by region (continent) to make scanning easy, with
+ * a quick search field at the top that matches country name or any of
+ * its prefix patterns. A "Clear" action wipes the selection; "All"
+ * selects every country in the registry.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CountryManagerDialog(
+    selectedCountries: Set<String>,
+    onToggleCountry: (String) -> Unit,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+
+    // Group filtered results by region, keeping the registry's original
+    // region order so continents don't reshuffle while the user types.
+    // The build uses a mutable map for ergonomic appends and then widens
+    // it to a read-only view; the cast is safe because we never mutate
+    // the lists after this point.
+    @Suppress("UNCHECKED_CAST")
+    val groups: LinkedHashMap<String, List<CallsignCountry>> = remember(searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) {
+            CallsignRegistry.namesByRegion()
+        } else {
+            val out = LinkedHashMap<String, MutableList<CallsignCountry>>()
+            for (c in CallsignRegistry.countries) {
+                if (c.name.contains(q, ignoreCase = true) ||
+                    c.templates.any { it.prefix.contains(q, ignoreCase = true) }
+                ) {
+                    out.getOrPut(c.region) { mutableListOf() }.add(c)
+                }
+            }
+            out as LinkedHashMap<String, List<CallsignCountry>>
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        // Inside a Dialog the system insets are not always passed
+        // through to the Scaffold's default contentWindowInsets, so we
+        // zero it out and apply systemBarsPadding on the content
+        // ourselves. This avoids double-padding at the bottom and
+        // ensures the top bar clears the status bar.
+        Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            topBar = {
+                TopAppBar(
+                    title = { Text("Select regions") },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close")
+                        }
+                    },
+                    actions = {
+                        TextButton(onClick = onClear) { Text("Clear") }
+                        TextButton(onClick = onSelectAll) { Text("All") }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars),
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search by country or prefix") },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+
+                if (groups.isEmpty()) {
+                    Text(
+                        text = "No countries match \"$searchQuery\".",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    for ((region, countries) in groups) {
+                        item(key = "header-$region") {
+                            Text(
+                                text = region,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 12.dp,
+                                    bottom = 4.dp,
+                                ),
+                            )
+                        }
+                        items(
+                            items = countries,
+                            key = { country -> "country-$region-${country.name}" },
+                        ) { country ->
+                            val isSelected = country.name in selectedCountries
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onToggleCountry(country.name) }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = null,
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = country.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                    val prefixes = country.templates
+                                        .joinToString(" \u00b7 ") {
+                                            it.prefix.ifEmpty { "\u2014" }
+                                        }
+                                    Text(
+                                        text = prefixes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
                 }
             }
         }

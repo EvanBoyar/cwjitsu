@@ -158,6 +158,12 @@ class SettingsRepository(private val context: Context) {
         }
         o.put("callsignCountries", countries)
         o.put("textSource", config.textSource)
+        // The optional '/' prefix and suffix for generated callsigns.
+        // An empty string is the on-disk representation of "no decoration"
+        // and round-trips to `null` in [MixedConfig]. Older saved configs
+        // predate these keys, so we always write them explicitly.
+        o.put("callsignPrefix", config.callsignPrefix ?: "")
+        o.put("callsignSuffix", config.callsignSuffix ?: "")
         return o.toString()
     }
 
@@ -174,6 +180,10 @@ class SettingsRepository(private val context: Context) {
             .mapNotNull { i -> countriesArr.optString(i).takeIf { it.isNotEmpty() } }
             .toSet()
         val text = o.optString("textSource")
+        // An empty or missing string is the on-disk representation of
+        // "no prefix / no suffix" and maps to `null` in [MixedConfig].
+        val prefix = o.optString("callsignPrefix", "").ifEmpty { null }
+        val suffix = o.optString("callsignSuffix", "").ifEmpty { null }
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -182,6 +192,8 @@ class SettingsRepository(private val context: Context) {
             enabledKinds = kinds,
             callsignCountries = countries,
             textSource = text,
+            callsignPrefix = prefix,
+            callsignSuffix = suffix,
         )
     }
 }

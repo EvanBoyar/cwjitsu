@@ -20,6 +20,8 @@ object ContentMixer {
         nato: Boolean = true,
         callsignCountries: Set<String> = MixedConfig.DEFAULT_COUNTRIES,
         textSource: String = "",
+        callsignPrefix: String? = MixedConfig.DEFAULT_CALLSIGN_PREFIX,
+        callsignSuffix: String? = MixedConfig.DEFAULT_CALLSIGN_SUFFIX,
     ): List<ContentItem> {
         if (enabledKinds.isEmpty()) return emptyList()
         val out = mutableListOf<ContentItem>()
@@ -47,12 +49,20 @@ object ContentMixer {
                 ContentKind.CALLSIGNS -> {
                     if (callsignCountries.isEmpty()) continue
                     // One callsign per selected country per round, in
-                    // sorted (deterministic) order.
+                    // sorted (deterministic) order. The optional
+                    // prefix / suffix from the user's MixedConfig are
+                    // stitched around the core callsign by the
+                    // generator (e.g. "W1/AB4CD" or "AB4CD/P").
                     for (countryName in callsignCountries.sorted()) {
                         val country = CallsignRegistry.byName(countryName)
                             ?: CallsignRegistry.countries.first()
                         out.addAll(
-                            CallsignGenerator().batch(1, country).map { callsign ->
+                            CallsignGenerator().batch(
+                                count = 1,
+                                country = country,
+                                formatPrefix = callsignPrefix,
+                                formatSuffix = callsignSuffix,
+                            ).map { callsign ->
                                 ContentItem(
                                     text = callsign,
                                     spokenAnswer = if (nato) {
