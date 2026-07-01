@@ -116,7 +116,11 @@ class CwAudioEngine(
         val pcm: ShortArray = ShortArray(blockSize)
         var localWrite: Long = 0L
         val master: Float = config.masterVolume
-        val fading: Boolean = config.toneFadingEnabled
+        // Tone fading is always on; clicks at element boundaries are
+        // always smoothed via the envelope. Used to be a user toggle,
+        // but in practice no one wanted the clicky variant, so it is
+        // not configurable anymore.
+        val fading: Boolean = true
         val noiseEnabled: Boolean = config.noiseType != NoiseType.NONE && config.noiseVolume > 0f
         val noiseVol: Float = config.noiseVolume
         val maxSamples: Long = sched.totalSamples.toLong()

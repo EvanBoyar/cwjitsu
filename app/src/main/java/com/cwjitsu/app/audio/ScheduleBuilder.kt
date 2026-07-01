@@ -3,6 +3,7 @@ package com.cwjitsu.app.audio
 import com.cwjitsu.app.practice.ContentItem
 import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.PracticeConfig
+import com.cwjitsu.app.practice.SloppyMode
 import com.cwjitsu.app.practice.Timing
 import kotlin.math.max
 import kotlin.random.Random
@@ -57,6 +58,11 @@ class ScheduleBuilder(
         // Emit a single letter's morse pattern. Adds intra-gap (1 dt) between elements.
         // All elements share the supplied [itemFreq] so the whole [ContentItem]
         // sounds like one tone when randomizeFrequency is on.
+        //
+        // Sloppy-mode perturbations live here so they don't leak into the
+        // timing math elsewhere in the pipeline. STRAIGHT_KEY jitters every
+        // element/gap duration by a hand-tuned percentage to sound like a
+        // hand-pumped key.
         fun emitLetterMorse(
             letterMorse: String,
             label: String,
@@ -66,7 +72,8 @@ class ScheduleBuilder(
             for (i in letterMorse.indices) {
                 val c = letterMorse[i]
                 if (c == '.' || c == '-') {
-                    val dur = if (c == '.') dotSamples else dashSamples
+                    val baseDur = if (c == '.') dotSamples else dashSamples
+                    val dur = jitterElement(baseDur, config.sloppyMode)
                     events += ToneEvent(
                         startSample = cursor,
                         endSample = cursor + dur,
@@ -77,10 +84,12 @@ class ScheduleBuilder(
                     cursor += dur
                 }
                 if (i < letterMorse.length - 1 && letterMorse[i + 1] != ' ') {
-                    cursor += intraGapSamples
+                    cursor += jitterGap(intraGapSamples, config.sloppyMode)
                 }
             }
-            if (addTrailingIntra) cursor += intraGapSamples
+            if (addTrailingIntra) {
+                cursor += jitterGap(intraGapSamples, config.sloppyMode)
+            }
         }
 
         fun emitItem(item: ContentItem) {
@@ -144,6 +153,44 @@ class ScheduleBuilder(
     private fun pickAmp(config: PracticeConfig): Float =
         if (!config.volumeVariationEnabled) 1.0f
         else 0.85f + random.nextFloat() * 0.15f
+
+    /**
+     * Apply sloppy-mode jitter to an individual element duration (a dot or
+     * a dash). +/-30% makes the rhythm obviously loose — +/-10% reads as
+     * machine-clean to the human ear. Returns at least 1 sample so the
+     * audio engine never receives a zero-length event.
+     */
+    private fun jitterElement(baseSamples: Int, mode: SloppyMode): Int =
+        when (mode) {
+            SloppyMode.OFF -> baseSamples
+            SloppyMode.STRAIGHT_KEY ->
+                jitterSamples(baseSamples, 0.70f..1.30f)
+        }
+
+    /**
+     * Apply sloppy-mode jitter to a gap. Inter-element / inter-character
+     * gaps are where a real straight key sounds most obviously human: the
+     * operator listens ahead and over/under-pauses. +/-45% makes the
+     * cadence vary widely. Narrower ranges collapse into a uniform rhythm.
+     */
+    private fun jitterGap(baseSamples: Int, mode: SloppyMode): Int =
+        when (mode) {
+            SloppyMode.OFF -> baseSamples
+            SloppyMode.STRAIGHT_KEY ->
+                jitterSamples(baseSamples, 0.55f..1.45f)
+        }
+
+    private fun jitterSamples(baseSamples: Int, scaleRange: ClosedFloatingPointRange<Float>): Int {
+        // Compute the scale factor manually so this compiles against any
+        // Kotlin version. `Random.nextFloat(from, until)` is convenient but
+        // not present in every stdlib; doing it ourselves removes the
+        // dependency on that overload.
+        val span = scaleRange.endInclusive - scaleRange.start
+        val factor = scaleRange.start + random.nextFloat() * span
+        // Floor at 1 sample so the engine never receives a zero-length
+        // event that would just consume CPU for no audible output.
+        return max(1, (baseSamples.toFloat() * factor).toInt())
+    }
 }
 
 data class Schedule(

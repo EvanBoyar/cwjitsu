@@ -14,6 +14,7 @@ import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
+import com.cwjitsu.app.practice.SloppyMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -40,11 +41,12 @@ class SettingsRepository(private val context: Context) {
         val FREQUENCY_MIN_HZ = intPreferencesKey("frequency_min_hz")
         val FREQUENCY_MAX_HZ = intPreferencesKey("frequency_max_hz")
         val RANDOMIZE_FREQUENCY = booleanPreferencesKey("randomize_frequency")
-        val TONE_FADING_ENABLED = booleanPreferencesKey("tone_fading_enabled")
+        val REPLAY_AFTER_ANSWER = booleanPreferencesKey("replay_after_answer")
         val VOLUME_VARIATION_ENABLED = booleanPreferencesKey("volume_variation_enabled")
         val MASTER_VOLUME = floatPreferencesKey("master_volume")
         val NOISE_TYPE = stringPreferencesKey("noise_type")
         val NOISE_VOLUME = floatPreferencesKey("noise_volume")
+        val SLOPPY_MODE = stringPreferencesKey("sloppy_mode")
         val MIXED_CONFIG_JSON = stringPreferencesKey("mixed_config_json")
         // Legacy key from the previous slot-based model. Kept here only so
         // we can clean it up on the next save. Old data is abandoned.
@@ -67,11 +69,14 @@ class SettingsRepository(private val context: Context) {
             frequencyMinHz = p[Keys.FREQUENCY_MIN_HZ] ?: 500,
             frequencyMaxHz = p[Keys.FREQUENCY_MAX_HZ] ?: 800,
             randomizeFrequency = p[Keys.RANDOMIZE_FREQUENCY] ?: false,
-            toneFadingEnabled = p[Keys.TONE_FADING_ENABLED] ?: true,
+            replayAfterAnswer = p[Keys.REPLAY_AFTER_ANSWER] ?: false,
             volumeVariationEnabled = p[Keys.VOLUME_VARIATION_ENABLED] ?: true,
             masterVolume = p[Keys.MASTER_VOLUME] ?: 0.85f,
             noiseType = NoiseType.entries.firstOrNull { it.name == p[Keys.NOISE_TYPE] } ?: NoiseType.NONE,
             noiseVolume = p[Keys.NOISE_VOLUME] ?: 0.0f,
+            sloppyMode = SloppyMode.entries
+                .firstOrNull { it.name == p[Keys.SLOPPY_MODE] }
+                ?: SloppyMode.OFF,
             prosignSpokenMode = ProsignSpokenMode.entries
                 .firstOrNull { it.name == p[Keys.PROSIGN_SPOKEN_MODE] }
                 ?: ProsignSpokenMode.LITERAL,
@@ -93,11 +98,12 @@ class SettingsRepository(private val context: Context) {
             p[Keys.FREQUENCY_MIN_HZ] = config.frequencyMinHz
             p[Keys.FREQUENCY_MAX_HZ] = config.frequencyMaxHz
             p[Keys.RANDOMIZE_FREQUENCY] = config.randomizeFrequency
-            p[Keys.TONE_FADING_ENABLED] = config.toneFadingEnabled
+            p[Keys.REPLAY_AFTER_ANSWER] = config.replayAfterAnswer
             p[Keys.VOLUME_VARIATION_ENABLED] = config.volumeVariationEnabled
             p[Keys.MASTER_VOLUME] = config.masterVolume
             p[Keys.NOISE_TYPE] = config.noiseType.name
             p[Keys.NOISE_VOLUME] = config.noiseVolume
+            p[Keys.SLOPPY_MODE] = config.sloppyMode.name
             p[Keys.PROSIGN_SPOKEN_MODE] = config.prosignSpokenMode.name
             p[Keys.NATO_SPOKEN_ANSWERS] = config.natoSpokenAnswers
         }

@@ -15,6 +15,24 @@ enum class ProsignSpokenMode {
     MEANING,
 }
 
+/**
+ * How loose the keying should sound. Adds character to the practice
+ * session but still keeps the code recognizable.
+ */
+enum class SloppyMode {
+    /**
+     * Clean, machine-perfect timing. No jitter.
+     */
+    OFF,
+
+    /**
+     * Emulate a hand-pumped straight key: random +/-jitter on dot/dash
+     * durations and inter-element/character gaps. The code is still
+     * unambiguous; the rhythm just sounds human.
+     */
+    STRAIGHT_KEY,
+}
+
 data class PracticeConfig(
     val characterWpm: Int = 18,
     val farnsworthWpm: Int? = null,
@@ -22,17 +40,18 @@ data class PracticeConfig(
     val postSendPauseMs: Long = 1500,
     val answerDelayMs: Long = 2000,
     val answerEnabled: Boolean = true,
+    val replayAfterAnswer: Boolean = false,
     val courtesyToneEnabled: Boolean = true,
     val courtesyToneMs: Long = 400,
     val frequencyHz: Int = 600,
     val frequencyMinHz: Int = 500,
     val frequencyMaxHz: Int = 800,
     val randomizeFrequency: Boolean = false,
-    val toneFadingEnabled: Boolean = true,
     val volumeVariationEnabled: Boolean = true,
     val masterVolume: Float = 0.85f,
     val noiseType: NoiseType = NoiseType.NONE,
     val noiseVolume: Float = 0.0f,
+    val sloppyMode: SloppyMode = SloppyMode.OFF,
     val prosignSpokenMode: ProsignSpokenMode = ProsignSpokenMode.LITERAL,
     /**
      * When true, characters and callsigns are spelled as NATO phonetics

@@ -1,7 +1,9 @@
 package com.cwjitsu.app.service
 
 import com.cwjitsu.app.audio.CwAudioEngine
+import com.cwjitsu.app.audio.Schedule
 import com.cwjitsu.app.audio.ScheduleBuilder
+import com.cwjitsu.app.audio.ToneEvent
 import com.cwjitsu.app.practice.ContentItem
 import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.PracticeConfig
@@ -105,8 +107,74 @@ class SessionOrchestrator(
                 delay(config.answerDelayMs)
                 val answer = item.spokenAnswer ?: item.text
                 awaitTts(answer, item.text)
+
+                // Optional one-shot replay of the same code, never
+                // counted as a repetition. Useful for catching a code
+                // the listener missed on the first listening pass.
+                if (config.replayAfterAnswer) {
+                    delay(config.answerDelayMs)
+                    val replay = builder.build(listOf(item), timesToRepeat = 1, config = config)
+                    engine.setSchedule(replay, config)
+                    engine.play()
+                    waitForAudioToFinish(replay.totalSamples)
+                }
             }
         }
+
+        // Courtesy tone: short tone played once after the whole batch
+        // answers have finished, like a real repeater's "dit" at the
+        // end of a sequence. Disabled by config. Always uses the
+        // currently tuned frequency so it matches the practice tone.
+        if (config.courtesyToneEnabled) {
+            playCourtesyTone(config)
+        }
+    }
+
+    private suspend fun playCourtesyTone(config: PracticeConfig) {
+        // Two short tones back-to-back with NO gap between them, like the
+        // familiar repeater "courtesy" pip that real repeaters emit at
+        // the end of a sequence. Fixed at 50 ms per tone and 947 / 1187
+        // Hz — short enough to feel like an unobtrusive end-of-batch
+        // marker, and the two-tone shape makes it unmistakable so the
+        // user can hear the boundary without a spoken announcement.
+        val toneSamples = (50L * engine.sampleRate / 1000)
+            .toInt()
+            .coerceAtLeast(1)
+        // Pick the midpoint of the practice-tone amplitude range so the
+        // courtesy tone sits at roughly the same level as the rest of
+        // the session, not louder. Bypassing Master/volume-variation
+        // would otherwise make the courtesy tone pop out awkwardly.
+        val courtesyAmp = if (config.volumeVariationEnabled) 0.92f else 1.0f
+        val firstEvent = ToneEvent(
+            startSample = 0,
+            endSample = toneSamples,
+            freqHz = 947,
+            amplitude = courtesyAmp,
+            label = "courtesy1",
+        )
+        // Second event starts exactly where the first one ends — zero
+        // gap. CwAudioEngine mixes overlapping events additively, so
+        // we explicitly keep these tones strictly sequential, not
+        // overlapping; if they overlapped, it would just sum both
+        // frequencies into a buzz instead of a clean two-tone pip.
+        val secondEvent = ToneEvent(
+            startSample = toneSamples,
+            endSample = toneSamples * 2,
+            freqHz = 1187,
+            amplitude = courtesyAmp,
+            label = "courtesy2",
+        )
+        val courtesy = Schedule(
+            events = listOf(firstEvent, secondEvent),
+            totalSamples = toneSamples * 2,
+            sampleRate = engine.sampleRate,
+        )
+        engine.setSchedule(courtesy, config)
+        engine.play()
+        waitForAudioToFinish(courtesy.totalSamples)
+        // Brief settling pause so the next batch's first element doesn't
+        // butt up against the courtesy tone's envelope tail.
+        delay(80)
     }
 
     private suspend fun waitForAudioToFinish(totalSamples: Int) {

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
+import com.cwjitsu.app.practice.SloppyMode
 
 /**
  * Reusable Compose panel that exposes the whole [PracticeConfig] to the user.
@@ -39,13 +41,43 @@ fun ConfigPanel(
             onValueChange = { onConfigChange(config.copy(characterWpm = it.toInt())) },
         )
 
+        // Farnsworth breaking: optional. When off, the slider is disabled
+        // and `farnsworthWpm` is null. When on, the slider starts at
+        // characterWpm and can be lowered down to that minimum; sliding
+        // all the way to the left always re-disables Farnsworth rather
+        // than clamping the speed to the current charWPM.
+        ToggleRow(
+            label = "Enable Farnsworth spacing",
+            checked = config.farnsworthWpm != null,
+            onCheckedChange = { enabled ->
+                onConfigChange(
+                    config.copy(
+                        farnsworthWpm = if (enabled) {
+                            // Pick a default a few wpm above the configured
+                            // character speed so the slider thumb sits
+                            // visibly above charWpm and the user can see
+                            // Farnsworth is actually engaged. Capped at 60
+                            // so it never overflows the slider range.
+                            (config.characterWpm + 5).coerceAtMost(60)
+                        } else null,
+                    )
+                )
+            },
+        )
+        val farnsOn = config.farnsworthWpm != null
         LabeledSlider(
-            label = "Farnsworth speed (>= char WPM)",
+            label = "Farnsworth speed",
             value = (config.farnsworthWpm ?: config.characterWpm).toFloat(),
             valueRange = config.characterWpm.toFloat()..60f,
-            steps = 60 - config.characterWpm,
-            valueLabel = config.farnsworthWpm?.toString() ?: "off",
-            onValueChange = { onConfigChange(config.copy(farnsworthWpm = it.toInt())) },
+            steps = (60 - config.characterWpm).coerceAtLeast(0),
+            valueLabel = if (farnsOn) "${config.farnsworthWpm}" else "off",
+            onValueChange = { v ->
+                onConfigChange(config.copy(farnsworthWpm = v.toInt()))
+            },
+            // Greys out the slider when Farnsworth is off so the user can
+            // still see the layout but cannot accidentally brush against
+            // the toggle and accidentally clamp Farnsworth to charWPM.
+            enabled = farnsOn,
         )
 
         LabeledSlider(
@@ -81,10 +113,29 @@ fun ConfigPanel(
             onCheckedChange = { onConfigChange(config.copy(answerEnabled = it)) },
         )
 
+        // One-shot replay of the code after the spoken answer. The
+        // replay is NOT a repetition — it is a single extra send so the
+        // listener can catch a code they missed on the first listening
+        // pass.
+        ToggleRow(
+            label = "Replay code after answer",
+            checked = config.replayAfterAnswer,
+            onCheckedChange = { onConfigChange(config.copy(replayAfterAnswer = it)) },
+        )
+
         ToggleRow(
             label = "Courtesy tone after sequence",
             checked = config.courtesyToneEnabled,
             onCheckedChange = { onConfigChange(config.copy(courtesyToneEnabled = it)) },
+        )
+
+        Text(
+            "Keying character",
+            style = MaterialTheme.typography.titleLarge,
+        )
+        SloppyModeRow(
+            current = config.sloppyMode,
+            onSelect = { onConfigChange(config.copy(sloppyMode = it)) },
         )
 
         LabeledSlider(
@@ -131,12 +182,6 @@ fun ConfigPanel(
         )
 
         ToggleRow(
-            label = "Tone fading (smooth dot/dash boundaries)",
-            checked = config.toneFadingEnabled,
-            onCheckedChange = { onConfigChange(config.copy(toneFadingEnabled = it)) },
-        )
-
-        ToggleRow(
             label = "Volume variation per character",
             checked = config.volumeVariationEnabled,
             onCheckedChange = { onConfigChange(config.copy(volumeVariationEnabled = it)) },
@@ -170,22 +215,66 @@ private fun LabeledSlider(
     steps: Int,
     valueLabel: String,
     onValueChange: (Float) -> Unit,
+    enabled: Boolean = true,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text(valueLabel, style = MaterialTheme.typography.labelLarge)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            )
+            Text(
+                valueLabel,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            )
         }
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = onValueChange,
             valueRange = valueRange,
             steps = steps,
+            enabled = enabled,
             colors = SliderDefaults.colors(
                 thumbColor = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
+                disabledThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                disabledActiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
             ),
         )
+    }
+}
+
+/**
+ * Two-chip row that picks one of [SloppyMode]'s entries. Picking a chip
+ * stores the choice in [PracticeConfig.sloppyMode]; the schedule builder
+ * reads it from there.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SloppyModeRow(
+    current: SloppyMode,
+    onSelect: (SloppyMode) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SloppyMode.entries.forEach { mode ->
+            FilterChip(
+                selected = current == mode,
+                onClick = { onSelect(mode) },
+                label = {
+                    Text(
+                        when (mode) {
+                            SloppyMode.OFF -> "Clean"
+                            SloppyMode.STRAIGHT_KEY -> "Straight key"
+                        }
+                    )
+                },
+            )
+        }
     }
 }
 
