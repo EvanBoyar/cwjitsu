@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground. The PNG (441x441) is drawn into the central
+  66dp x 66dp safe zone of the 108dp foreground canvas, so the launcher mask
+  never crops the artwork.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="66dp"
+        android:height="66dp"
+        android:drawable="@drawable/cwjicon"
+        android:gravity="center" />
+</layer-list>

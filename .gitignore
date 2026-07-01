@@ -1,0 +1,12 @@
+# Build outputs
+build/
+app/build/
+
+# Local SDK configuration
+local.properties
+
+# IDE
+.idea/
+*.iml
+.gradle/
+.kotlin/

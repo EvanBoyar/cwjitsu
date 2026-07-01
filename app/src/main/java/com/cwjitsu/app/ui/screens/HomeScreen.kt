@@ -1,0 +1,511 @@
+package com.cwjitsu.app.ui.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.MergeType
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.QuestionAnswer
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cwjitsu.app.CWJitsuApp
+import com.cwjitsu.app.R
+import com.cwjitsu.app.data.WordDictionary
+import com.cwjitsu.app.practice.CallsignRegistry
+import com.cwjitsu.app.practice.ContentItem
+import com.cwjitsu.app.practice.ContentKind
+import com.cwjitsu.app.practice.ContentMixer
+import com.cwjitsu.app.practice.MixedConfig
+import com.cwjitsu.app.practice.PracticeConfig
+import com.cwjitsu.app.practice.ProsignSpokenMode
+import com.cwjitsu.app.service.ContentRegenerator
+import com.cwjitsu.app.service.SessionOrchestrator
+import com.cwjitsu.app.ui.components.PlaybackControls
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+/**
+ * The Home screen is the app's only practice surface. It hosts the
+ * category toggles (the old "quick practice" tiles are gone — the tiles
+ * were the same thing as the mixed-practice toggles) and the per-category
+ * settings that only apply when a given category is enabled:
+ *
+ *  - **Call Signs** -> multi-select country chips
+ *  - **Text**       -> a debounced, focus-loss-flushed source text field
+ *
+ * Categories with no per-category settings (Characters, Prosigns, Q-codes,
+ * Words) are still togglable, and the global NATO / prosign mode toggles
+ * live in the Settings screen.
+ *
+ * The session is continuous: the regenerator is called every round, and
+ * the user stops by tapping Stop.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun HomeScreen(onPickSettings: () -> Unit) {
+    val app = CWJitsuApp.instance
+    val config by app.settings.configFlow.collectAsStateWithLifecycle(initialValue = PracticeConfig())
+    val orchestrator = app.orchestrator
+    val runnerState by orchestrator.runnerState.collectAsStateWithLifecycle()
+    val currentBatch by orchestrator.currentBatch.collectAsStateWithLifecycle()
+    val savedConfig by app.settings.mixedConfigFlow.collectAsStateWithLifecycle(initialValue = null)
+    val effectiveConfig: MixedConfig = savedConfig ?: MixedConfig()
+    // "Now playing" is hidden by default to avoid spoiling the answer.
+    var showNowPlaying by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // Toggles use the repository's atomic updateMixedConfig so that fast
+    // taps on different chips compose correctly (no read-then-write race)
+    // and so that an empty selection (e.g. deselecting the last category)
+    // is preserved rather than being silently re-mapped to defaults.
+    fun toggleKind(kind: ContentKind) {
+        scope.launch {
+            app.settings.updateMixedConfig { current ->
+                val newKinds = if (kind in current.enabledKinds) {
+                    current.enabledKinds - kind
+                } else {
+                    current.enabledKinds + kind
+                }
+                current.copy(enabledKinds = newKinds)
+            }
+        }
+    }
+
+    fun toggleCountry(country: String) {
+        scope.launch {
+            app.settings.updateMixedConfig { current ->
+                val newCountries = if (country in current.callsignCountries) {
+                    current.callsignCountries - country
+                } else {
+                    current.callsignCountries + country
+                }
+                current.copy(callsignCountries = newCountries)
+            }
+        }
+    }
+
+    val regenerator: ContentRegenerator = { cfg ->
+        val current = app.settings.mixedConfigFlow.first() ?: MixedConfig()
+        val words = WordDictionary.get(app)
+        ContentMixer.build(
+            enabledKinds = current.enabledKinds,
+            words = words,
+            prosignMode = cfg.prosignSpokenMode,
+            nato = cfg.natoSpokenAnswers,
+            callsignCountries = current.callsignCountries,
+            textSource = current.textSource,
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(id = R.drawable.cwjicon),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .padding(end = 8.dp),
+                        )
+                        Column {
+                            Text("CW Jitsu", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Morse practice",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showNowPlaying = !showNowPlaying }) {
+                        Icon(
+                            imageVector = if (showNowPlaying) Icons.Filled.VisibilityOff
+                                          else Icons.Filled.Visibility,
+                            contentDescription = if (showNowPlaying) "Hide now playing"
+                                                 else "Show now playing",
+                        )
+                    }
+                    IconButton(onClick = onPickSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            // Wrap the playback controls with the navigation-bars inset so
+            // the Play/Stop button clears the Android home gesture pill.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+            ) {
+                HorizontalDivider()
+                PlaybackControls(
+                    isRunning = runnerState == SessionOrchestrator.RunnerState.RUNNING,
+                    onPlay = { orchestrator.start(regenerator, config) },
+                    onStop = { orchestrator.stop() },
+                )
+            }
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "Choose what to practise",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                "Tap a category to toggle. The session keeps going until you stop it.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+
+            // 2-column grid of large category cards. Cards are chunked
+            // into pairs and laid out in Rows so this works inside the
+            // parent's verticalScroll (a LazyVerticalGrid inside a
+            // verticalScroll would need extra height accounting).
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ContentKind.entries.chunked(2).forEach { rowItems ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        rowItems.forEach { kind ->
+                            CategoryCard(
+                                kind = kind,
+                                selected = kind in effectiveConfig.enabledKinds,
+                                onToggle = { toggleKind(kind) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        // Pad the last row if it only has one item so the
+                        // single card stays the same width as the others.
+                        if (rowItems.size == 1) {
+                            Box(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
+            // Per-category settings: prosign spoken answer (Literal vs Meaning) for PROSIGNS.
+            if (ContentKind.PROSIGNS in effectiveConfig.enabledKinds) {
+                Text(
+                    "Prosign spoken answer",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "How prosigns are read aloud.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = config.prosignSpokenMode == ProsignSpokenMode.LITERAL,
+                        onClick = {
+                            scope.launch {
+                                app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL))
+                            }
+                        },
+                        label = { Text("Literal (\"A S\")") },
+                    )
+                    FilterChip(
+                        selected = config.prosignSpokenMode == ProsignSpokenMode.MEANING,
+                        onClick = {
+                            scope.launch {
+                                app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.MEANING))
+                            }
+                        },
+                        label = { Text("Meaning (\"wait\")") },
+                    )
+                }
+            }
+
+            // Per-category settings: countries (multi-select) for CALLSIGNS.
+            if (ContentKind.CALLSIGNS in effectiveConfig.enabledKinds) {
+                Text(
+                    "Callsigns countries",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "Tap to select which countries' callsigns to drill on.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (country in CallsignRegistry.names()) {
+                        val selected = country in effectiveConfig.callsignCountries
+                        FilterChip(
+                            selected = selected,
+                            onClick = { toggleCountry(country) },
+                            label = { Text(country) },
+                        )
+                    }
+                }
+            }
+
+            // Per-category settings: source text for TEXT.
+            if (ContentKind.TEXT in effectiveConfig.enabledKinds) {
+                Text(
+                    "Text source",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                TextSourceField(
+                    savedConfig = savedConfig,
+                    effectiveText = effectiveConfig.textSource,
+                    app = app,
+                )
+            }
+
+            if (showNowPlaying) {
+                PreviewPane(items = currentBatch)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryCard(
+    kind: ContentKind,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
+                         else MaterialTheme.colorScheme.surface
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurface
+    Card(
+        modifier = modifier.height(112.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = contentColor,
+        ),
+        border = if (selected) null
+                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        onClick = onToggle,
+    ) {
+        Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(20.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = kind.icon(),
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = kind.label(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = kind.subtitle(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor.copy(alpha = 0.7f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextSourceField(
+    savedConfig: MixedConfig?,
+    effectiveText: String,
+    app: CWJitsuApp,
+) {
+    // Local mirror of the saved text so typing is smooth and we don't
+    // write to DataStore on every keystroke. The actual save is debounced
+    // (250 ms) and also flushed on focus loss.
+    //
+    // The remember key (`savedConfig == null`) is `true` only on the very
+    // first composition, while DataStore is still loading. Once it emits a
+    // real value, the key becomes `false` and stays `false`, so subsequent
+    // DataStore emissions cannot clobber in-flight typing.
+    var localText by remember(savedConfig == null) {
+        mutableStateOf(effectiveText)
+    }
+    val saveScope = rememberCoroutineScope()
+    var saveJob by remember { mutableStateOf<Job?>(null) }
+
+    fun commitText(text: String, debounceMs: Long = 250) {
+        saveJob?.cancel()
+        saveJob = saveScope.launch {
+            delay(debounceMs)
+            // Atomic read-modify-write: a chip toggle (which uses the
+            // same updateMixedConfig) running in between would otherwise
+            // race with a saveMixedConfig that wrote the full old config
+            // and clobbered the toggle.
+            app.settings.updateMixedConfig { current ->
+                if (text == current.textSource) current
+                else current.copy(textSource = text)
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = localText,
+        onValueChange = { newValue ->
+            localText = newValue
+            commitText(newValue)
+        },
+        placeholder = { Text("Type or paste text to practise") },
+        minLines = 2,
+        maxLines = 4,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (!focusState.isFocused) {
+                    commitText(localText, debounceMs = 0)
+                }
+            },
+    )
+}
+
+@Composable
+private fun PreviewPane(items: List<ContentItem>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 88.dp, max = 200.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Now playing (${items.size})",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            if (items.isEmpty()) {
+                Text(
+                    "Toggle a category and press Play.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            } else {
+                val shown = items.take(20)
+                val joined = shown.joinToString(" · ") { it.text }
+                Text(
+                    joined,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                if (items.size > shown.size) {
+                    Text(
+                        "... and ${items.size - shown.size} more",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun ContentKind.label(): String = when (this) {
+    ContentKind.CHARACTERS -> "Characters"
+    ContentKind.PROSIGNS -> "Prosigns"
+    ContentKind.QCODES -> "Q-codes"
+    ContentKind.WORDS -> "Words"
+    ContentKind.TEXT -> "Text"
+    ContentKind.CALLSIGNS -> "Call Signs"
+}
+
+private fun ContentKind.icon(): ImageVector = when (this) {
+    ContentKind.CHARACTERS -> Icons.Filled.TextFields
+    ContentKind.PROSIGNS -> Icons.AutoMirrored.Filled.MergeType
+    ContentKind.QCODES -> Icons.Filled.QuestionAnswer
+    ContentKind.WORDS -> Icons.Filled.Translate
+    ContentKind.TEXT -> Icons.AutoMirrored.Filled.Article
+    ContentKind.CALLSIGNS -> Icons.Filled.SettingsInputAntenna
+}
+
+private fun ContentKind.subtitle(): String = when (this) {
+    ContentKind.CHARACTERS -> "A-Z, 0-9"
+    ContentKind.PROSIGNS -> "AR, BT, SK..."
+    ContentKind.QCODES -> "QTH, QSL..."
+    ContentKind.WORDS -> "English"
+    ContentKind.TEXT -> "Your text"
+    ContentKind.CALLSIGNS -> "By country"
+}
