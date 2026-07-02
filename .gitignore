@@ -10,3 +10,8 @@ local.properties
 *.iml
 .gradle/
 .kotlin/
+
+# Signing keys must NEVER be committed - CI gets the keystore via an
+# encrypted Actions secret, local builds use ~/.android/debug.keystore.
+*.keystore
+*.jks

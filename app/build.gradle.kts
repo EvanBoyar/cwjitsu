@@ -12,8 +12,27 @@ android {
         applicationId = "com.cwjitsu.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 26
-        versionName = "0.2.2"
+        versionCode = 27
+        versionName = "0.2.3"
+    }
+
+    // Local builds and the GitHub Actions release build must sign with the
+    // SAME key, or an APK downloaded from a GitHub release can't install
+    // over an adb-installed build (Android rejects updates whose signing
+    // key differs). Locally that key is the developer debug keystore in the
+    // home directory; CI restores the identical keystore from an encrypted
+    // repository secret to a temp path and points CWJITSU_KEYSTORE at it.
+    // The keystore file itself must NEVER be committed to the repo.
+    signingConfigs {
+        create("shared") {
+            storeFile = file(
+                System.getenv("CWJITSU_KEYSTORE")
+                    ?: "${System.getProperty("user.home")}/.android/debug.keystore"
+            )
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
@@ -23,10 +42,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("shared")
         }
         debug {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
 

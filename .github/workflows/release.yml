@@ -26,6 +26,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Restore the shared signing keystore from the encrypted repository
+      # secret so this build is signed with the same key as local builds -
+      # otherwise the released APK can't install over an adb-installed one.
+      # Decoded OUTSIDE the checkout, onto the ephemeral runner's temp dir.
+      - name: Restore signing keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+          echo "CWJITSU_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
