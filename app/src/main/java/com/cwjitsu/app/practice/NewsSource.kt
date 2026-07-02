@@ -60,10 +60,16 @@ object NewsSources {
 
     /**
      * Resolve the set of feeds the user has actually turned on: the enabled
-     * built-ins plus every custom URL they've added.
+     * built-ins plus every custom URL they've added. This governs *playback* -
+     * downloads always cover [all] feeds so toggling a source on later
+     * already has its headlines cached (possibly offline by then).
      */
     fun active(enabledIds: Set<String>, customUrls: List<String>): List<NewsSource> =
         BUILT_IN.filter { it.id in enabledIds } + customUrls.map { NewsSource.custom(it) }
+
+    /** Every feed we know about: all built-ins plus the user's custom URLs. */
+    fun all(customUrls: List<String>): List<NewsSource> =
+        BUILT_IN + customUrls.map { NewsSource.custom(it) }
 }
 
 /** One parsed headline. [id] is a stable key (feed guid/link, else a hash). */

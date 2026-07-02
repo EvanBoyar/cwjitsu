@@ -26,9 +26,9 @@ class NewsRefreshWorker(
         val cfg = app.settings.mixedConfigFlow.first() ?: MixedConfig()
         // Only spend the user's data if they actually practise news.
         if (ContentKind.NEWS !in cfg.enabledKinds) return Result.success()
-        app.news.refreshAndAwait(
-            NewsSources.active(cfg.enabledNewsSources, cfg.customNewsFeeds)
-        )
+        // Download every feed, not just the enabled ones, so toggling a
+        // source on later (possibly offline) already has content cached.
+        app.news.refreshAndAwait(NewsSources.all(cfg.customNewsFeeds))
         return Result.success()
     }
 }

@@ -77,20 +77,27 @@ class NewsRepository(private val context: Context) {
     }
 
     /**
-     * Draw the next headline without replacement. Returns null only when the
-     * pool is empty (nothing cached yet and we're offline). Safe to call every
-     * round from the practice loop - it never blocks on I/O.
+     * Draw the next headline without replacement, considering only headlines
+     * whose source name is in [allowedSources] - the cache deliberately holds
+     * *every* feed's headlines so a source can be toggled on while offline,
+     * but playback must honor the user's current selection. Returns null when
+     * nothing eligible is cached. Safe to call every round from the practice
+     * loop - it never blocks on I/O.
      */
-    fun nextHeadline(): Headline? = synchronized(lock) {
-        if (pool.isEmpty()) return null
-        var candidates = pool.filter { it.id !in playedIds }
+    fun nextHeadline(allowedSources: Set<String>): Headline? = synchronized(lock) {
+        val eligible = pool.filter { it.sourceName in allowedSources }
+        if (eligible.isEmpty()) return null
+        var candidates = eligible.filter { it.id !in playedIds }
         if (candidates.isEmpty()) {
-            // Cycle complete - reshuffle. Seed the "already played" set with
-            // just the last headline so we don't play it twice in a row.
-            playedIds.clear()
-            lastId?.let { if (pool.size > 1) playedIds.add(it) }
-            candidates = pool.filter { it.id !in playedIds }
-            if (candidates.isEmpty()) candidates = pool.toList()
+            // Cycle through the enabled subset complete - reshuffle just that
+            // subset (other sources' bag progress is left alone). Seed the
+            // "already played" set with the last headline so we don't play
+            // it twice in a row across the seam.
+            val eligibleIds = eligible.mapTo(HashSet()) { it.id }
+            playedIds.removeAll(eligibleIds)
+            lastId?.let { if (eligible.size > 1 && it in eligibleIds) playedIds.add(it) }
+            candidates = eligible.filter { it.id !in playedIds }
+            if (candidates.isEmpty()) candidates = eligible
         }
         val pick = candidates.random(random)
         playedIds.add(pick.id)

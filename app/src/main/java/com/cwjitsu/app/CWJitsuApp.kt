@@ -10,6 +10,7 @@ import com.cwjitsu.app.audio.CwAudioEngine
 import com.cwjitsu.app.data.NewsRefreshWorker
 import com.cwjitsu.app.data.NewsRepository
 import com.cwjitsu.app.data.SettingsRepository
+import com.cwjitsu.app.data.UpdateChecker
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.NewsSources
@@ -31,6 +32,7 @@ class CWJitsuApp : Application() {
     val audioEngine: CwAudioEngine by lazy { CwAudioEngine() }
     val ttsManager: TtsManager by lazy { TtsManager(applicationContext) }
     val news: NewsRepository by lazy { NewsRepository(applicationContext) }
+    val updateChecker: UpdateChecker by lazy { UpdateChecker() }
 
     // Global orchestrator that survives screen navigation as long as the app
     // process is alive. The user can keep a practice session running in the
@@ -54,7 +56,17 @@ class CWJitsuApp : Application() {
         orchestratorScope.launch {
             val cfg = settings.mixedConfigFlow.first() ?: MixedConfig()
             if (ContentKind.NEWS in cfg.enabledKinds) {
-                news.refresh(NewsSources.active(cfg.enabledNewsSources, cfg.customNewsFeeds))
+                // Download every feed, not just the enabled ones, so toggling
+                // a source on later (possibly offline) already has content.
+                news.refresh(NewsSources.all(cfg.customNewsFeeds))
+            }
+        }
+
+        // Once per launch: see if a newer tagged release exists on GitHub.
+        // Suppressible from Settings; failures (e.g. offline) are silent.
+        orchestratorScope.launch {
+            if (settings.updateCheckEnabledFlow.first()) {
+                updateChecker.check(BuildConfig.VERSION_NAME)
             }
         }
 

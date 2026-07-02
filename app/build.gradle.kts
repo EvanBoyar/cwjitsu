@@ -12,8 +12,8 @@ android {
         applicationId = "com.cwjitsu.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.2.0"
+        versionCode = 26
+        versionName = "0.2.2"
     }
 
     buildTypes {

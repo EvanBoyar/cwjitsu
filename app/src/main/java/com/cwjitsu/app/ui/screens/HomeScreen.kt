@@ -1,5 +1,7 @@
 package com.cwjitsu.app.ui.screens
 
+import android.content.Intent
+import androidx.core.net.toUri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.Sos
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -71,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -129,6 +133,35 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     // "Now playing" is hidden by default to avoid spoiling the answer.
     var showNowPlaying by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // One-time alert when the launch-time GitHub check found a newer tagged
+    // release than this build. Dismissing clears the checker's state, so it
+    // won't re-appear until the next launch finds an update again. The check
+    // itself can be turned off entirely in Settings.
+    val updateInfo by app.updateChecker.available.collectAsStateWithLifecycle()
+    updateInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { app.updateChecker.dismiss() },
+            title = { Text("Update available") },
+            text = {
+                Text(
+                    "CW Jitsu v${info.version} is out - this device is running " +
+                        "v${com.cwjitsu.app.BuildConfig.VERSION_NAME}. " +
+                        "You can turn this check off in Settings.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, info.url.toUri()))
+                    app.updateChecker.dismiss()
+                }) { Text("View release") }
+            },
+            dismissButton = {
+                TextButton(onClick = { app.updateChecker.dismiss() }) { Text("Not now") }
+            },
+        )
+    }
 
     // Toggles use the repository's atomic updateMixedConfig so that fast
     // taps on different chips compose correctly (no read-then-write race)
@@ -181,7 +214,10 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     fun refreshNews() {
         scope.launch {
             val cfg = app.settings.mixedConfigFlow.first() ?: MixedConfig()
-            app.news.refresh(NewsSources.active(cfg.enabledNewsSources, cfg.customNewsFeeds))
+            // Download every feed regardless of which are enabled - the
+            // source toggles only gate playback, so switching a source on
+            // later (possibly offline) already has its headlines cached.
+            app.news.refresh(NewsSources.all(cfg.customNewsFeeds))
         }
     }
 
@@ -192,7 +228,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                          else c.enabledNewsSources + id
                 c.copy(enabledNewsSources = ns)
             }
-            refreshNews()
+            // No refresh needed: everything is already downloaded, and the
+            // toggle takes effect at playback time.
         }
     }
 
@@ -241,7 +278,12 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         // shuffle-bag inside the repository guarantees no near-term repeats;
         // it returns null when nothing is cached (e.g. offline first run).
         val newsItem = if (ContentKind.NEWS in current.enabledKinds) {
-            app.news.nextHeadline()?.let { h ->
+            // Only the user's selected sources are eligible for playback,
+            // even though the cache holds headlines from every feed.
+            val allowedSources = NewsSources
+                .active(current.enabledNewsSources, current.customNewsFeeds)
+                .mapTo(mutableSetOf()) { it.name }
+            app.news.nextHeadline(allowedSources)?.let { h ->
                 ContentItem(
                     text = sanitizeHeadline(h.title),
                     spokenAnswer = h.title,
@@ -280,7 +322,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("CW Jitsu", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Morse practice",
+                                "by NR8E",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             )
@@ -958,7 +1000,7 @@ private fun NewsSettings(
             )
         }
         Text(
-            "Ignore the global repeat count for news - headlines are long.",
+            "Ignore the global repeat count for news as headlines are long.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )

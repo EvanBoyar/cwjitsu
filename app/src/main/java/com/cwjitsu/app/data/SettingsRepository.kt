@@ -54,6 +54,16 @@ class SettingsRepository(private val context: Context) {
         val MIXED_SLOTS_JSON_LEGACY = stringPreferencesKey("mixed_slots_json")
         val PROSIGN_SPOKEN_MODE = stringPreferencesKey("prosign_spoken_mode")
         val NATO_SPOKEN_ANSWERS = booleanPreferencesKey("nato_spoken_answers")
+        val UPDATE_CHECK_ENABLED = booleanPreferencesKey("update_check_enabled")
+    }
+
+    /** Whether to check GitHub for a newer release on launch. Default on. */
+    val updateCheckEnabledFlow: Flow<Boolean> = context.dataStore.data.map { p ->
+        p[Keys.UPDATE_CHECK_ENABLED] ?: true
+    }
+
+    suspend fun setUpdateCheckEnabled(enabled: Boolean) {
+        context.dataStore.edit { p -> p[Keys.UPDATE_CHECK_ENABLED] = enabled }
     }
 
     val configFlow: Flow<PracticeConfig> = context.dataStore.data.map { p ->
