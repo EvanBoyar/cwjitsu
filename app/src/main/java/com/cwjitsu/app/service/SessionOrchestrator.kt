@@ -40,6 +40,13 @@ class SessionOrchestrator(
 ) {
     companion object {
         private const val TAG = "CWJitsu/Orch"
+
+        // The playback queue keeps already-played items so Previous can step
+        // back into them. To keep an all-day session from growing the list
+        // forever, once the play position is past HISTORY_TRIM_AT the head
+        // is trimmed down to HISTORY_KEEP items behind the position.
+        private const val HISTORY_TRIM_AT = 100
+        private const val HISTORY_KEEP = 50
     }
 
     enum class RunnerState { IDLE, RUNNING, FINISHED, STOPPED }
@@ -69,10 +76,12 @@ class SessionOrchestrator(
     private val _paused = MutableStateFlow(false)
     val paused: StateFlow<Boolean> = _paused
 
-    // Set by [skip] to abandon the current item and jump to the next one.
-    // Cleared by the playback loop once it advances.
+    // Set by [skip] / [previous] to abandon the current item and jump to the
+    // next / previous one. Cleared by the playback loop once it advances.
     @Volatile
     private var skipRequested = false
+    @Volatile
+    private var previousRequested = false
 
     private var job: Job? = null
 
@@ -81,26 +90,56 @@ class SessionOrchestrator(
         Log.d(TAG, "start regenerator")
         _paused.value = false
         skipRequested = false
+        previousRequested = false
         job = scope.launch(Dispatchers.Default) {
             _state.value = RunnerState.RUNNING
             // Fresh session starts with a blank now-playing window.
             _nowPlaying.value = NowPlaying()
+            // The queue holds every item of the session (bounded by the
+            // history trim) with an explicit play position, so Previous can
+            // step back across batch boundaries and Next/normal advance is
+            // just position + 1. The regenerator refills the tail whenever
+            // the position runs off the end.
+            val queue = mutableListOf<ContentItem>()
+            var position = 0
             try {
             while (isActive) {
-                val items = regenerator(config)
-                Log.d(TAG, "round items.size=${items.size}")
-                if (items.isEmpty()) {
-                    // Nothing to play right now (e.g. all categories are
-                    // deselected, or Call Signs is on with no countries).
-                    // Clear any stale preview and wait for the user to
-                    // enable content. The session stays "armed" in the
-                    // RUNNING state and starts playing as soon as the
-                    // regenerator returns a non-empty list.
-                    _nowPlaying.value = NowPlaying()
-                    delay(500)
-                    continue
+                if (position >= queue.size) {
+                    val items = regenerator(config)
+                    Log.d(TAG, "round items.size=${items.size}")
+                    if (items.isEmpty()) {
+                        // Nothing to play right now (e.g. all categories are
+                        // deselected, or Call Signs is on with no countries).
+                        // Clear any stale preview and wait for the user to
+                        // enable content. The session stays "armed" in the
+                        // RUNNING state and starts playing as soon as the
+                        // regenerator returns a non-empty list.
+                        _nowPlaying.value = NowPlaying()
+                        delay(500)
+                        continue
+                    }
+                    queue += items
+                    if (position > HISTORY_TRIM_AT) {
+                        val drop = position - HISTORY_KEEP
+                        queue.subList(0, drop).clear()
+                        position -= drop
+                    }
                 }
-                playBatch(items, config)
+                playItem(
+                    item = queue[position],
+                    previousItem = queue.getOrNull(position - 1),
+                    config = config,
+                )
+                if (previousRequested) {
+                    previousRequested = false
+                    skipRequested = false
+                    // At the head of the (trimmed) history, Previous simply
+                    // replays the current item.
+                    position = (position - 1).coerceAtLeast(0)
+                } else {
+                    skipRequested = false
+                    position++
+                }
             }
                 _state.value = RunnerState.FINISHED
             } catch (e: CancellationException) {
@@ -120,6 +159,7 @@ class SessionOrchestrator(
         tts.stop()
         _paused.value = false
         skipRequested = false
+        previousRequested = false
         _state.value = RunnerState.STOPPED
     }
 
@@ -138,6 +178,23 @@ class SessionOrchestrator(
         // engine's track stays warm for the next item. Setting the flag first
         // guarantees the loop observes the skip once waitForAudioToFinish
         // returns (abort() flips the engine out of PLAYING).
+        engine.abort()
+        tts.stop()
+    }
+
+    /**
+     * Jump back to the item played before the current one (or replay the
+     * current item when there is no earlier history). Aborts the in-flight
+     * tone and any spoken answer the same way [skip] does; the playback loop
+     * sees [previousRequested] and steps its queue position back. If the
+     * session was paused, going back also resumes it. No-op unless a session
+     * is RUNNING.
+     */
+    fun previous() {
+        if (_state.value != RunnerState.RUNNING) return
+        Log.d(TAG, "previous")
+        previousRequested = true
+        _paused.value = false
         engine.abort()
         tts.stop()
     }
@@ -177,122 +234,127 @@ class SessionOrchestrator(
         }
     }
 
-    private suspend fun playBatch(items: List<ContentItem>, config: PracticeConfig) {
-        val sampleRate = engine.sampleRate
-        val builder = ScheduleBuilder(sampleRate)
+    /**
+     * Play one queue item end to end: code, optional spoken answer +
+     * replay, and the courtesy tone. Returns early (without clearing the
+     * flags - the caller's queue loop does that) when Skip or Previous
+     * aborts the item mid-flight. [previousItem] is only used for the
+     * rolling now-playing window.
+     */
+    private suspend fun playItem(
+        item: ContentItem,
+        previousItem: ContentItem?,
+        config: PracticeConfig,
+    ) {
+        val builder = ScheduleBuilder(engine.sampleRate)
         val reps = config.repetitions.coerceAtLeast(1)
-        Log.d(TAG, "playBatch ENTER items=${items.size} reps=$reps answers=${config.answerEnabled} courtesy=${config.courtesyToneEnabled}")
+        Log.d(TAG, "playItem ENTER text='${item.text}' spoken='${item.spokenAnswer}' reps=$reps answers=${config.answerEnabled} courtesy=${config.courtesyToneEnabled}")
+        val morse = item.morseOverride
+            ?: item.text.uppercase()
+                .mapNotNull(Morse::codeFor)
+                .joinToString("")
+        Log.d(TAG, "playItem morse='${morse.take(80)}' isBlank=${morse.isBlank()}")
+        if (morse.isBlank()) return
 
-        for ((idx, item) in items.withIndex()) {
-            Log.d(TAG, "playBatch item[$idx] text='${item.text}' spoken='${item.spokenAnswer}'")
-            val morse = item.morseOverride
-                ?: item.text.uppercase()
-                    .mapNotNull(Morse::codeFor)
-                    .joinToString("")
-            Log.d(TAG, "playBatch item[$idx] morse='${morse.take(80)}' isBlank=${morse.isBlank()}")
-            if (morse.isBlank()) continue
+        // Park here while paused so we don't advance to the next item
+        // (or its now-playing label) until the user resumes.
+        awaitResume()
 
-            // Park here while paused so we don't advance to the next item
-            // (or its now-playing label) until the user resumes.
-            awaitResume()
+        // Advance the rolling now-playing window. Done here, after the
+        // blank-morse return, so unplayable items never appear.
+        _nowPlaying.value = NowPlaying(
+            previous = previousItem,
+            current = item,
+        )
 
-            // Advance the rolling now-playing window: what we sent last
-            // becomes "previous", this item becomes "current". Done here,
-            // after the blank-morse skip, so skipped items never appear.
-            _nowPlaying.value = NowPlaying(
-                previous = _nowPlaying.value.current,
-                current = item,
-            )
+        // Single-shot items (e.g. a news headline) are sent once; hearing
+        // a long headline repeated N times would be tedious.
+        val effectiveReps = if (item.singleShot) 1 else reps
+        val batchForRep = List(effectiveReps) { item }
+        val schedule = builder.build(batchForRep, timesToRepeat = 1, config = config)
+        engine.setSchedule(schedule, config)
+        engine.play()
+        waitForAudioToFinish(schedule.totalSamples)
 
-            // Single-shot items (e.g. a news headline) are sent once; hearing
-            // a long headline repeated N times would be tedious.
-            val effectiveReps = if (item.singleShot) 1 else reps
-            val batchForRep = List(effectiveReps) { item }
-            val schedule = builder.build(batchForRep, timesToRepeat = 1, config = config)
-            engine.setSchedule(schedule, config)
-            engine.play()
-            waitForAudioToFinish(schedule.totalSamples)
+        // Skip/Previous pressed during the tone: engine.abort() unblocked the
+        // wait above; bail out now (no answer, no courtesy).
+        if (skipRequested || previousRequested) return
 
-            // Skip pressed during the tone: engine.stop() unblocked the wait
-            // above; jump straight to the next item (no answer, no courtesy).
-            if (skipRequested) { skipRequested = false; continue }
+        delay(config.postSendPauseMs)
 
-            delay(config.postSendPauseMs)
+        if (config.answerEnabled) {
+            delay(config.answerDelayMs)
+            // Sanitize the spoken text before it reaches the TTS
+            // engine. The platform TextToSpeech implementation on
+            // many devices (Google TTS on stock Android, Samsung
+            // TTS, eSpeak) treats `/` as a sentence boundary - it
+            // silences the character entirely AND splits the
+            // utterance into multiple chunks, firing an early
+            // `onDone` for the FIRST prefix chunk. The orchestrator
+            // would then resume `awaitTts` and immediately move on
+            // to the post-batch courtesy tone while the TTS engine
+            // was still speaking the suffix of the callsign;
+            // Android's audio-focus ducking suppressed that 100 ms
+            // pip entirely, making the courtesy tone vanish for
+            // every decorated callsign. Replacing `/` with the
+            // spoken word "stroke" wraps the boundary in plain
+            // English so the engine treats it as a single spoken
+            // sentence and fires `onDone` only when the whole
+            // answer is finished.
+            val rawAnswer = item.spokenAnswer ?: item.text
+            val answer = rawAnswer.replace("/", " stroke ")
+            Log.d(TAG, "playItem awaitTts ENTER answer='${answer.take(80)}' id='${item.text}'")
+            val ok = awaitTts(answer, item.text)
+            Log.d(TAG, "playItem awaitTts RETURN ok=$ok")
 
-            if (config.answerEnabled) {
-                delay(config.answerDelayMs)
-                // Sanitize the spoken text before it reaches the TTS
-                // engine. The platform TextToSpeech implementation on
-                // many devices (Google TTS on stock Android, Samsung
-                // TTS, eSpeak) treats `/` as a sentence boundary - it
-                // silences the character entirely AND splits the
-                // utterance into multiple chunks, firing an early
-                // `onDone` for the FIRST prefix chunk. The orchestrator
-                // would then resume `awaitTts` and immediately move on
-                // to the post-batch courtesy tone while the TTS engine
-                // was still speaking the suffix of the callsign;
-                // Android's audio-focus ducking suppressed that 100 ms
-                // pip entirely, making the courtesy tone vanish for
-                // every decorated callsign. Replacing `/` with the
-                // spoken word "stroke" wraps the boundary in plain
-                // English so the engine treats it as a single spoken
-                // sentence and fires `onDone` only when the whole
-                // answer is finished.
-                val rawAnswer = item.spokenAnswer ?: item.text
-                val answer = rawAnswer.replace("/", " stroke ")
-                Log.d(TAG, "playBatch item[$idx] awaitTts ENTER answer='${answer.take(80)}' id='${item.text}'")
-                val ok = awaitTts(answer, item.text)
-                Log.d(TAG, "playBatch item[$idx] awaitTts RETURN ok=$ok")
-
-                // Optional one-shot replay of the same code, never
-                // counted as a repetition. Useful for catching a code
-                // the listener missed on the first listening pass.
-                // Single-shot items (news headlines) are never replayed -
-                // "play each headline only once" means exactly once.
-                if (config.replayAfterAnswer && !item.singleShot) {
-                    awaitResume()
-                    delay(config.answerDelayMs)
-                    val replay = builder.build(listOf(item), timesToRepeat = 1, config = config)
-                    engine.setSchedule(replay, config)
-                    engine.play()
-                    waitForAudioToFinish(replay.totalSamples)
-                }
-            }
-
-            // Skip pressed during the pause/answer: advance without the pip.
-            if (skipRequested) { skipRequested = false; continue }
-
-            // Courtesy tone: a short pip played after EACH item (once its
-            // code and spoken answer have finished), like a real repeater's
-            // courtesy tone after every over. This marks the boundary
-            // between transmissions so the listener hears the end of each
-            // item, not just the end of the whole batch. Disabled by
-            // config. Always uses the currently tuned frequency so it
-            // matches the practice tone.
-            if (config.courtesyToneEnabled) {
-                // Don't let the end-of-item pip sound while paused.
+            // Optional one-shot replay of the same code, never
+            // counted as a repetition. Useful for catching a code
+            // the listener missed on the first listening pass.
+            // Single-shot items (news headlines) are never replayed -
+            // "play each headline only once" means exactly once.
+            if (config.replayAfterAnswer && !item.singleShot) {
                 awaitResume()
-                Log.d(TAG, "playCourtesyTone ENTER item[$idx]")
-                // Let the platform TTS engine release audio focus and drain
-                // its final phoneme before our pip plays. The previous "/"-
-                // sanitization fix addressed the wider audible bug for
-                // decorated callsigns (commit 65f2b0e). On the FIRST item
-                // of a freshly-pressed Play session, the TTS engine is
-                // still warming up its speech model and holds USAGE_MEDIA
-                // audio focus for noticeably longer than on subsequent
-                // utterances: stock Android pipes duck our courtesy pip into
-                // inaudibility for that window. 400 ms is comfortably
-                // longer than the worst observed first TTS focus-release
-                // latency (~250 ms on a Pixel 7) and short enough that the
-                // listener still feels the pip as part of the same
-                // sequence. Only needed when an answer (TTS) was actually
-                // spoken for this item; otherwise skip the wait.
-                if (config.answerEnabled) delay(400)
-                playCourtesyTone(config)
-                Log.d(TAG, "playCourtesyTone EXIT item[$idx]")
+                delay(config.answerDelayMs)
+                val replay = builder.build(listOf(item), timesToRepeat = 1, config = config)
+                engine.setSchedule(replay, config)
+                engine.play()
+                waitForAudioToFinish(replay.totalSamples)
             }
         }
-        Log.d(TAG, "playBatch EXIT for-loop, courtesy=${config.courtesyToneEnabled}")
+
+        // Skip/Previous pressed during the pause/answer: bail without the pip.
+        if (skipRequested || previousRequested) return
+
+        // Courtesy tone: a short pip played after EACH item (once its
+        // code and spoken answer have finished), like a real repeater's
+        // courtesy tone after every over. This marks the boundary
+        // between transmissions so the listener hears the end of each
+        // item, not just the end of the whole batch. Disabled by
+        // config. Always uses the currently tuned frequency so it
+        // matches the practice tone.
+        if (config.courtesyToneEnabled) {
+            // Don't let the end-of-item pip sound while paused.
+            awaitResume()
+            Log.d(TAG, "playCourtesyTone ENTER")
+            // Let the platform TTS engine release audio focus and drain
+            // its final phoneme before our pip plays. The previous "/"-
+            // sanitization fix addressed the wider audible bug for
+            // decorated callsigns (commit 65f2b0e). On the FIRST item
+            // of a freshly-pressed Play session, the TTS engine is
+            // still warming up its speech model and holds USAGE_MEDIA
+            // audio focus for noticeably longer than on subsequent
+            // utterances: stock Android pipes duck our courtesy pip into
+            // inaudibility for that window. 400 ms is comfortably
+            // longer than the worst observed first TTS focus-release
+            // latency (~250 ms on a Pixel 7) and short enough that the
+            // listener still feels the pip as part of the same
+            // sequence. Only needed when an answer (TTS) was actually
+            // spoken for this item; otherwise skip the wait.
+            if (config.answerEnabled) delay(400)
+            playCourtesyTone(config)
+            Log.d(TAG, "playCourtesyTone EXIT")
+        }
+        Log.d(TAG, "playItem EXIT text='${item.text}'")
     }
 
     private suspend fun playCourtesyTone(config: PracticeConfig) {

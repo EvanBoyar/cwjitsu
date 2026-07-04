@@ -2,17 +2,24 @@ package com.cwjitsu.app.service
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.AudioAttributes as MediaAudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.cwjitsu.app.CWJitsuApp
 import com.cwjitsu.app.R
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,6 +45,12 @@ import kotlinx.coroutines.launch
  *                        ->  orchestrator.resume()/pause()  (the Player.Listener)
  * orchestrator.resume()/pause() are idempotent, so the mirror never fights
  * the listener.
+ *
+ * Previous/Next transport buttons don't touch the carrier at all: the
+ * session is built on a [ForwardingPlayer] wrapper that force-advertises
+ * the seek-to-previous/next commands (so the notification and lock screen
+ * show the buttons) and forwards them straight to the orchestrator's
+ * previous()/skip().
  */
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -72,8 +85,50 @@ class PlaybackService : MediaSessionService() {
             }
         })
         player = ep
-        session = MediaSession.Builder(this, ep)
-            .setCallback(PlaybackCallback())
+
+        // The carrier has a single looping media item, so ExoPlayer never
+        // advertises seek-to-previous/next on its own. Force the commands on
+        // and reroute them to the orchestrator so the notification / lock
+        // screen / Bluetooth prev-next buttons drive the practice session.
+        val transportPlayer = object : ForwardingPlayer(ep) {
+            override fun getAvailableCommands(): Player.Commands =
+                super.getAvailableCommands().buildUpon()
+                    .addAll(
+                        Player.COMMAND_SEEK_TO_PREVIOUS,
+                        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                        Player.COMMAND_SEEK_TO_NEXT,
+                        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                    )
+                    .build()
+
+            override fun isCommandAvailable(command: Int): Boolean =
+                when (command) {
+                    Player.COMMAND_SEEK_TO_PREVIOUS,
+                    Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_TO_NEXT,
+                    Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                    -> true
+                    else -> super.isCommandAvailable(command)
+                }
+
+            override fun seekToPrevious() = app.orchestrator.previous()
+            override fun seekToPreviousMediaItem() = app.orchestrator.previous()
+            override fun seekToNext() = app.orchestrator.skip()
+            override fun seekToNextMediaItem() = app.orchestrator.skip()
+        }
+
+        // Custom Stop action: unlike pause, Stop tears the practice session
+        // down entirely, which (via the mirror collector below) clears the
+        // carrier and dismisses the notification.
+        val stopButton = CommandButton.Builder()
+            .setDisplayName("Stop")
+            .setIconResId(R.drawable.ic_stop)
+            .setSessionCommand(SessionCommand(ACTION_STOP_SESSION, Bundle.EMPTY))
+            .build()
+
+        session = MediaSession.Builder(this, transportPlayer)
+            .setCallback(PlaybackCallback(onStopSession = { app.orchestrator.stop() }))
+            .setCustomLayout(listOf(stopButton))
             .build()
 
         // Mirror the orchestrator's state onto the carrier so the media
@@ -132,20 +187,44 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
+/** Custom session command: fully stop the practice session (not just pause). */
+const val ACTION_STOP_SESSION = "com.cwjitsu.app.STOP_SESSION"
+
 /**
- * Minimal MediaSession.Callback so the session accepts controllers. Media
- * button events (notification, Bluetooth, lock screen) arrive as the default
- * play/pause player commands and are handled on the carrier's Player.Listener.
+ * MediaSession.Callback that accepts controllers and the custom Stop command.
+ * Media button events (notification, Bluetooth, lock screen) arrive as the
+ * default play/pause player commands and are handled on the carrier's
+ * Player.Listener; prev/next arrive on the ForwardingPlayer's seek overrides;
+ * the Stop button arrives here as a custom command.
  */
 @UnstableApi
-class PlaybackCallback : MediaSession.Callback {
+class PlaybackCallback(
+    private val onStopSession: () -> Unit,
+) : MediaSession.Callback {
     override fun onConnect(
         session: MediaSession,
         controller: MediaSession.ControllerInfo,
     ): MediaSession.ConnectionResult {
+        val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+            .buildUpon()
+            .add(SessionCommand(ACTION_STOP_SESSION, Bundle.EMPTY))
+            .build()
         return MediaSession.ConnectionResult.accept(
-            MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
+            sessionCommands,
             MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS,
         )
+    }
+
+    override fun onCustomCommand(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        customCommand: SessionCommand,
+        args: Bundle,
+    ): ListenableFuture<SessionResult> {
+        if (customCommand.customAction == ACTION_STOP_SESSION) {
+            onStopSession()
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+        return super.onCustomCommand(session, controller, customCommand, args)
     }
 }

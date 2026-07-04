@@ -1,41 +1,53 @@
 package com.cwjitsu.app.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
- * Play / stop control at the bottom of the Home screen, with a Skip button
- * that appears while a session is running.
+ * Transport controls at the bottom of the Home screen:
+ * Stop | Previous | Play-Pause | Next.
  *
- * The main button shows a stop icon and "Stop" while [isRunning] is true
- * (clicking it stops the session), otherwise a play icon and "Play". The
- * Skip button jumps to the next item (useful for long news headlines).
+ * All four buttons are always present with fixed sizes (Stop, Previous
+ * and Next are merely disabled while no session is running), so the
+ * Play/Pause button never changes size or position when the session
+ * state flips. The buttons are icon-only so nothing inside them shifts
+ * either. Play/Pause starts a session when idle, pauses a running one,
+ * and resumes a paused one. Stop tears the session down entirely
+ * (dismissing the media notification). Previous replays the item sent
+ * before the current one; Next skips ahead (useful for long news
+ * headlines). Next sits at the outer edge, away from Stop, since it is
+ * the button tapped most often mid-session.
  */
 @Composable
 fun PlaybackControls(
     isRunning: Boolean,
-    onPlay: () -> Unit,
+    isPaused: Boolean,
+    onPlayPause: () -> Unit,
     onStop: () -> Unit,
-    onSkip: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val showPlay = !isRunning || isPaused
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -43,38 +55,55 @@ fun PlaybackControls(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        SideButton(
+            icon = Icons.Filled.Stop,
+            contentDescription = "Stop",
+            enabled = isRunning,
+            onClick = onStop,
+        )
+        SideButton(
+            icon = Icons.Filled.SkipPrevious,
+            contentDescription = "Previous",
+            enabled = isRunning,
+            onClick = onPrevious,
+        )
         Button(
             modifier = Modifier.weight(1f).height(56.dp),
-            onClick = { if (isRunning) onStop() else onPlay() },
+            onClick = onPlayPause,
         ) {
             Icon(
-                imageVector = if (isRunning) Icons.Filled.Stop
-                              else Icons.Filled.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
-            Text(
-                text = if (isRunning) "Stop" else "Play",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(start = 8.dp),
+                imageVector = if (showPlay) Icons.Filled.PlayArrow
+                              else Icons.Filled.Pause,
+                contentDescription = if (showPlay) "Play" else "Pause",
+                modifier = Modifier.size(32.dp),
             )
         }
-        if (isRunning) {
-            FilledTonalButton(
-                onClick = onSkip,
-                modifier = Modifier.height(56.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.SkipNext,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp),
-                )
-                Text(
-                    text = "Skip",
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
-        }
+        SideButton(
+            icon = Icons.Filled.SkipNext,
+            contentDescription = "Next",
+            enabled = isRunning,
+            onClick = onNext,
+        )
+    }
+}
+
+@Composable
+private fun SideButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.height(56.dp).width(64.dp),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
@@ -117,7 +118,8 @@ import kotlinx.coroutines.launch
  * live in the Settings screen.
  *
  * The session is continuous: the regenerator is called every round, and
- * the user stops by tapping Stop.
+ * the user pauses/resumes with the Play-Pause button (also available in
+ * the media notification, alongside Previous and Next).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -126,6 +128,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     val config by app.settings.configFlow.collectAsStateWithLifecycle(initialValue = PracticeConfig())
     val orchestrator = app.orchestrator
     val runnerState by orchestrator.runnerState.collectAsStateWithLifecycle()
+    val isPaused by orchestrator.paused.collectAsStateWithLifecycle()
     val nowPlaying by orchestrator.nowPlaying.collectAsStateWithLifecycle()
     val newsStatus by app.news.status.collectAsStateWithLifecycle()
     val savedConfig by app.settings.mixedConfigFlow.collectAsStateWithLifecycle(initialValue = null)
@@ -341,6 +344,18 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     }
                 },
                 actions = {
+                    // Heart -> the developer's Buy Me a Coffee page.
+                    IconButton(onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, "https://buymeacoffee.com/elbow".toUri()),
+                        )
+                    }) {
+                        Icon(
+                            imageVector = Icons.Filled.Favorite,
+                            contentDescription = "Support the developer",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        )
+                    }
                     IconButton(onClick = { showNowPlaying = !showNowPlaying }) {
                         Icon(
                             imageVector = if (showNowPlaying) Icons.Filled.Visibility
@@ -379,11 +394,20 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     )
                 }
                 HorizontalDivider()
+                val isRunning = runnerState == SessionOrchestrator.RunnerState.RUNNING
                 PlaybackControls(
-                    isRunning = runnerState == SessionOrchestrator.RunnerState.RUNNING,
-                    onPlay = { orchestrator.start(regenerator, config) },
+                    isRunning = isRunning,
+                    isPaused = isPaused,
+                    onPlayPause = {
+                        when {
+                            !isRunning -> orchestrator.start(regenerator, config)
+                            isPaused -> orchestrator.resume()
+                            else -> orchestrator.pause()
+                        }
+                    },
                     onStop = { orchestrator.stop() },
-                    onSkip = { orchestrator.skip() },
+                    onPrevious = { orchestrator.previous() },
+                    onNext = { orchestrator.skip() },
                 )
             }
         },

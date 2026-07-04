@@ -12,8 +12,8 @@ android {
         applicationId = "com.cwjitsu.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 27
-        versionName = "0.2.3"
+        versionCode = 28
+        versionName = "0.2.4"
     }
 
     // Local builds and the GitHub Actions release build must sign with the
