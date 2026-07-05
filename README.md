@@ -1,7 +1,7 @@
 # CW Jitsu
 
 A Morse code (CW) listening-practice app for Android, by NR8E. Pick what to
-hear, press Play, and copy code continuously until you stop — with spoken
+hear, press Play, and copy code continuously until you stop with spoken
 answers after each item so you can check yourself hands-free.
 
 <p>
@@ -13,7 +13,7 @@ answers after each item so you can check yourself hands-free.
 
 - **Practice content**: characters, prosigns & Q-codes, English words, your
   own text, callsigns by country (with optional `/prefix` and `/suffix`
-  decoration), and live news headlines from RSS feeds — cached offline-first
+  decoration), and live news headlines from RSS feeds, cached offline-first
   so practice never waits on a connection.
 - **Spoken answers** after each item (NATO phonetics or plain letters), with
   optional replay of the code after the answer and a courtesy tone between
