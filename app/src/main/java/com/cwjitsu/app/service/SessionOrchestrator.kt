@@ -115,6 +115,10 @@ class SessionOrchestrator(
             while (isActive) {
                 // Fresh config every round so edits apply on the next send.
                 val config = configFlow.first()
+                // Also push it into the engine explicitly: the collector
+                // above races session startup, and this makes the first
+                // item's noise/volume deterministic.
+                engine.updateConfig(config)
                 if (position >= queue.size) {
                     val items = regenerator(config)
                     Log.d(TAG, "round items.size=${items.size}")
@@ -269,6 +273,7 @@ class SessionOrchestrator(
         // second copy of the Morse-encoding logic).
         val schedule = builder.build(List(effectiveReps) { item }, config)
         if (schedule.events.isEmpty()) return
+        Log.d(TAG, "playItem amps=${schedule.events.map { "%.3f".format(it.amplitude) }.distinct()} varEnabled=${config.volumeVariationEnabled} master=${config.masterVolume}")
 
         // Park here while paused so we don't advance to the next item
         // (or its now-playing label) until the user resumes.
@@ -281,7 +286,7 @@ class SessionOrchestrator(
             current = item,
         )
 
-        engine.setSchedule(schedule, config)
+        engine.setSchedule(schedule)
         engine.play()
         waitForAudioToFinish()
 
@@ -325,7 +330,8 @@ class SessionOrchestrator(
                 awaitResume()
                 delay(config.answerDelayMs)
                 val replay = builder.build(listOf(item), config)
-                engine.setSchedule(replay, config)
+                Log.d(TAG, "replay amps=${replay.events.map { "%.3f".format(it.amplitude) }.distinct()}")
+                engine.setSchedule(replay)
                 engine.play()
                 waitForAudioToFinish()
             }
@@ -392,14 +398,10 @@ class SessionOrchestrator(
         val toneSamples = (50L * engine.sampleRate / 1000)
             .toInt()
             .coerceAtLeast(1)
-        // Pin the pip to the midpoint of the shared volume-variation range
-        // so it sits at roughly the same level as the rest of the session,
-        // not louder. Bypassing Master/volume-variation entirely would make
-        // it pop out awkwardly.
-        val courtesyAmp = if (config.volumeVariationEnabled) {
-            (ScheduleBuilder.VOLUME_VARIATION_MIN_AMP +
-                ScheduleBuilder.VOLUME_VARIATION_MAX_AMP) / 2f
-        } else 1.0f
+        // Fixed comfortable level for the pip: a touch below full scale so
+        // it never pops out louder than the practice tones, and well above
+        // the quietest volume-variation roll so it can't vanish.
+        val courtesyAmp = 0.8f
         val firstEvent = ToneEvent(
             startSample = 0,
             endSample = toneSamples,
@@ -424,7 +426,7 @@ class SessionOrchestrator(
             totalSamples = toneSamples * 2,
             sampleRate = engine.sampleRate,
         )
-        engine.setSchedule(courtesy, config)
+        engine.setSchedule(courtesy)
         engine.play()
         Log.d(TAG, "playCourtesyTone waitForAudio ENTER totalSamples=${courtesy.totalSamples}")
         waitForAudioToFinish()

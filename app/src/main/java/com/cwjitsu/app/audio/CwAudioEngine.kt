@@ -59,34 +59,39 @@ class CwAudioEngine(
 
     @Volatile private var samplesElapsed: Long = 0L
 
-    /** Install the schedule to be played by the next [play] call. */
-    fun setSchedule(schedule: Schedule, config: PracticeConfig) {
+    /**
+     * Install the schedule to be played by the next [play] call. Deliberately
+     * does NOT touch the engine config: [updateConfig] is the single path for
+     * that. When schedules also carried a config, a courtesy pip or replay
+     * built from an item-start snapshot would re-apply a STALE config
+     * mid-item, briefly reverting a settings change (noise, volume) the live
+     * collector had already applied.
+     */
+    fun setSchedule(schedule: Schedule) {
         synchronized(lock) {
             curSchedule = schedule
-            applyConfigLocked(config)
             playPos = 0L
             samplesElapsed = 0L
         }
     }
 
     /**
-     * Update the active config without touching the schedule. Called live as
-     * the user edits settings so audio-level knobs (master volume, noise type
-     * and volume) take effect immediately; timing/frequency changes are baked
-     * into schedules and apply from the next [setSchedule].
+     * The single path for engine-level config (master volume, noise type and
+     * volume - everything read per rendered block). Driven by the
+     * orchestrator: live on every settings emission, plus once per item so a
+     * fresh session is deterministic before the first block renders.
+     * Timing/frequency changes are baked into schedules and apply from the
+     * next [setSchedule]. Keeps the noise generator across updates of the
+     * same noise type so the (stateful) brown-noise filter doesn't reset
+     * with an audible discontinuity on every tweak.
      */
     fun updateConfig(config: PracticeConfig) {
-        synchronized(lock) { applyConfigLocked(config) }
-    }
-
-    /** Must hold [lock]. Keeps the noise generator across config updates of
-     *  the same noise type so the (stateful) brown-noise filter doesn't reset
-     *  with an audible discontinuity on every item or settings tweak. */
-    private fun applyConfigLocked(config: PracticeConfig) {
-        if (config.noiseType != curConfig.noiseType) {
-            curNoise = NoiseGenerator(config.noiseType)
+        synchronized(lock) {
+            if (config.noiseType != curConfig.noiseType) {
+                curNoise = NoiseGenerator(config.noiseType)
+            }
+            curConfig = config
         }
-        curConfig = config
     }
 
     /** Start playing the installed schedule on the warm session track. */

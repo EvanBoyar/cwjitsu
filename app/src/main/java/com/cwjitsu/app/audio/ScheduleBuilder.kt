@@ -6,6 +6,7 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.SloppyMode
 import com.cwjitsu.app.practice.Timing
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.random.Random
 
 /**
@@ -39,13 +40,29 @@ class ScheduleBuilder(
 
     companion object {
         /**
-         * Per-item volume-variation amplitude range (see [pickAmp]). Shared
-         * with the courtesy tone so its level stays anchored to the middle
-         * of the practice-tone range instead of drifting when this range
-         * is retuned.
+         * Volume-variation span (see [pickAmp]). 18 dB is what real-band
+         * QSB sounds like; it survives phone-speaker dynamic-range
+         * compression, which flattened the previous narrow amplitude range
+         * into inaudibility.
          */
-        const val VOLUME_VARIATION_MIN_AMP = 0.35f
-        const val VOLUME_VARIATION_MAX_AMP = 1.0f
+        const val VOLUME_VARIATION_RANGE_DB = 18f
+
+        /**
+         * Minimum level difference between CONSECUTIVE rolls. Independent
+         * uniform rolls land ~40% of adjacent items within 4 dB of each
+         * other - and with full-volume spoken answers between items
+         * resetting the ear's loudness reference, that reads as "no
+         * variation at all". Forcing each roll at least this far from the
+         * previous one makes the variation unmissable while the long-run
+         * distribution stays spread across the whole range.
+         */
+        const val VOLUME_VARIATION_MIN_STEP_DB = 6f
+
+        // Attenuation of the previous roll, shared across builder instances
+        // (one is created per item) so the step rule spans consecutive
+        // items, not just tones within one schedule. Only touched from the
+        // orchestrator's single playback loop.
+        private var lastVariationDb: Float? = null
     }
 
     fun build(
@@ -167,16 +184,37 @@ class ScheduleBuilder(
         else config.frequencyHz
 
     /**
-     * Roll one amplitude for a whole item. The 0.35..1.0 span is ~9 dB -
-     * clearly audible as "a weaker station" while the quietest roll still
-     * sits well above any background noise. The previous 0.85..1.0 span
-     * (~1.4 dB) was below the just-noticeable difference and sounded like
-     * the setting did nothing.
+     * Roll one amplitude for a whole item, uniform in DECIBELS across
+     * [VOLUME_VARIATION_RANGE_DB] below full scale, at least
+     * [VOLUME_VARIATION_MIN_STEP_DB] away from the previous roll. Uniform
+     * in dB because loudness perception is logarithmic: a roll uniform in
+     * amplitude clusters near "loud" (half of 0.35..1.0 landed within
+     * 3.4 dB of full scale), which is why the setting originally sounded
+     * like it did nothing.
      */
-    private fun pickAmp(config: PracticeConfig): Float =
-        if (!config.volumeVariationEnabled) 1.0f
-        else VOLUME_VARIATION_MIN_AMP +
-            random.nextFloat() * (VOLUME_VARIATION_MAX_AMP - VOLUME_VARIATION_MIN_AMP)
+    private fun pickAmp(config: PracticeConfig): Float {
+        if (!config.volumeVariationEnabled) return 1.0f
+        val range = VOLUME_VARIATION_RANGE_DB
+        val last = lastVariationDb
+        val db = if (last == null) {
+            random.nextFloat() * range
+        } else {
+            // Sample uniformly from [0, range] minus the exclusion band
+            // around the previous roll, by drawing from the two remaining
+            // segments weighted by their lengths.
+            val lo = (last - VOLUME_VARIATION_MIN_STEP_DB).coerceAtLeast(0f)
+            val hi = (last + VOLUME_VARIATION_MIN_STEP_DB).coerceAtMost(range)
+            val allowed = lo + (range - hi)
+            if (allowed <= 0f) {
+                random.nextFloat() * range // unreachable while step*2 < range
+            } else {
+                val r = random.nextFloat() * allowed
+                if (r < lo) r else hi + (r - lo)
+            }
+        }
+        lastVariationDb = db
+        return 10f.pow(-db / 20f)
+    }
 
     /**
      * Apply sloppy-mode jitter to an individual element duration (a dot or
