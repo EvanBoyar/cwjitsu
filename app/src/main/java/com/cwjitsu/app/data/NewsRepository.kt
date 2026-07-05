@@ -127,33 +127,53 @@ class NewsRepository(private val context: Context) {
             return
         }
         _status.value = _status.value.copy(refreshing = true, message = null)
-        val fetched = coroutineScope {
+        val results: List<Pair<NewsSource, List<Headline>>> = coroutineScope {
             feeds.map { feed ->
                 async {
-                    runCatching { fetchAndParse(feed) }
+                    feed to runCatching { fetchAndParse(feed) }
                         .onFailure { Log.w(TAG, "feed ${feed.name} failed", it) }
                         .getOrElse { emptyList() }
                 }
             }.awaitAll()
-        }.flatten()
+        }
 
-        if (fetched.isEmpty()) {
+        if (results.all { it.second.isEmpty() }) {
             setStatus(
                 message = if (poolSize() == 0) "Couldn't load any headlines."
                           else "Couldn't refresh - using saved headlines.",
             )
             return
         }
-        merge(fetched)
+        merge(results, knownNames = feeds.mapTo(HashSet()) { it.name })
         persist()
-        setStatus(message = null)
+        val failed = results.filter { it.second.isEmpty() }.map { it.first.name }
+        setStatus(
+            message = if (failed.isEmpty()) null
+                      else "No headlines from: ${failed.joinToString(", ")}",
+        )
     }
 
-    /** Merge freshly fetched headlines into the pool, newest first, deduped. */
-    private fun merge(fresh: List<Headline>) = synchronized(lock) {
+    /**
+     * Fold a refresh's results into the pool. A feed that fetched
+     * successfully REPLACES its cached headlines outright, so stale
+     * headlines age out instead of accumulating up to [TOTAL_LIMIT];
+     * a feed that failed (offline, HTTP error) keeps its cached
+     * headlines - the offline-first promise. Headlines from feeds
+     * that are no longer configured at all (e.g. a removed custom
+     * feed) are purged.
+     */
+    private fun merge(
+        results: List<Pair<NewsSource, List<Headline>>>,
+        knownNames: Set<String>,
+    ) = synchronized(lock) {
+        val refreshedNames = results
+            .filter { it.second.isNotEmpty() }
+            .mapTo(HashSet()) { it.first.name }
+        val fresh = results.flatMap { it.second }
+        val kept = pool.filter { it.sourceName in knownNames && it.sourceName !in refreshedNames }
         val seen = HashSet<String>()
-        val merged = ArrayList<Headline>(fresh.size + pool.size)
-        for (h in fresh + pool) {
+        val merged = ArrayList<Headline>(fresh.size + kept.size)
+        for (h in fresh + kept) {
             if (seen.add(h.id)) merged.add(h)
             if (merged.size >= TOTAL_LIMIT) break
         }

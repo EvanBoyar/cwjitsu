@@ -63,11 +63,30 @@ class CwAudioEngine(
     fun setSchedule(schedule: Schedule, config: PracticeConfig) {
         synchronized(lock) {
             curSchedule = schedule
-            curConfig = config
-            curNoise = NoiseGenerator(config.noiseType)
+            applyConfigLocked(config)
             playPos = 0L
             samplesElapsed = 0L
         }
+    }
+
+    /**
+     * Update the active config without touching the schedule. Called live as
+     * the user edits settings so audio-level knobs (master volume, noise type
+     * and volume) take effect immediately; timing/frequency changes are baked
+     * into schedules and apply from the next [setSchedule].
+     */
+    fun updateConfig(config: PracticeConfig) {
+        synchronized(lock) { applyConfigLocked(config) }
+    }
+
+    /** Must hold [lock]. Keeps the noise generator across config updates of
+     *  the same noise type so the (stateful) brown-noise filter doesn't reset
+     *  with an audible discontinuity on every item or settings tweak. */
+    private fun applyConfigLocked(config: PracticeConfig) {
+        if (config.noiseType != curConfig.noiseType) {
+            curNoise = NoiseGenerator(config.noiseType)
+        }
+        curConfig = config
     }
 
     /** Start playing the installed schedule on the warm session track. */
@@ -167,7 +186,10 @@ class CwAudioEngine(
 
     /**
      * The single per-session render loop. Renders the active schedule when
-     * PLAYING and streams silence otherwise, so the track stays warm.
+     * PLAYING and streams background noise (or silence when noise is off)
+     * otherwise, so the track stays warm AND the noise bed is continuous for
+     * the whole session - through pauses between items, spoken answers, and
+     * courtesy tones - instead of gating harshly on and off around each send.
      */
     private fun pumpLoop(track: AudioTrack) {
         val block = FloatArray(blockSize)
@@ -181,11 +203,6 @@ class CwAudioEngine(
         }
 
         while (sessionRunning) {
-            if (_state.value != State.PLAYING) {
-                track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
-                continue
-            }
-
             val sched: Schedule?
             val pos: Long
             val cfg: PracticeConfig
@@ -197,14 +214,18 @@ class CwAudioEngine(
                 ns = curNoise
             }
 
-            if (sched == null || pos >= sched.totalSamples) {
-                // Current schedule finished (or none): mark done and idle.
-                synchronized(lock) {
-                    if (curSchedule === sched && _state.value == State.PLAYING) {
-                        _state.value = State.STOPPED
+            val playing = _state.value == State.PLAYING
+            if (!playing || sched == null || pos >= sched.totalSamples) {
+                if (playing) {
+                    // Current schedule finished (or none): mark done and idle.
+                    synchronized(lock) {
+                        if (curSchedule === sched && _state.value == State.PLAYING) {
+                            _state.value = State.STOPPED
+                        }
                     }
                 }
-                track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
+                renderNoiseOnly(noiseBuf, pcm, cfg, ns)
+                track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
                 continue
             }
 
@@ -218,6 +239,29 @@ class CwAudioEngine(
                     samplesElapsed = playPos
                 }
             }
+        }
+    }
+
+    /**
+     * Render a tone-free block: just the noise bed at exactly the same level
+     * [renderBlock] mixes it during a schedule's silent gaps, so there is no
+     * audible level step when a schedule starts or ends.
+     */
+    private fun renderNoiseOnly(
+        noiseBuf: FloatArray,
+        pcm: ShortArray,
+        cfg: PracticeConfig,
+        ns: NoiseGenerator,
+    ) {
+        if (cfg.noiseType == NoiseType.NONE || cfg.noiseVolume <= 0f) {
+            pcm.fill(0)
+            return
+        }
+        ns.fill(noiseBuf, 0, blockSize)
+        val gain = cfg.noiseVolume * cfg.masterVolume
+        for (i in 0 until blockSize) {
+            val clipped = (noiseBuf[i] * gain).coerceIn(-1f, 1f)
+            pcm[i] = (clipped * Short.MAX_VALUE).toInt().toShort()
         }
     }
 

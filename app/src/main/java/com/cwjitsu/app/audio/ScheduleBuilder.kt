@@ -68,6 +68,7 @@ class ScheduleBuilder(
             label: String,
             addTrailingIntra: Boolean,
             itemFreq: Int,
+            itemAmp: Float,
         ) {
             for (i in letterMorse.indices) {
                 val c = letterMorse[i]
@@ -78,7 +79,7 @@ class ScheduleBuilder(
                         startSample = cursor,
                         endSample = cursor + dur,
                         freqHz = itemFreq,
-                        amplitude = pickAmp(config),
+                        amplitude = itemAmp,
                         label = label,
                     )
                     cursor += dur
@@ -95,8 +96,11 @@ class ScheduleBuilder(
         fun emitItem(item: ContentItem) {
             val label = item.text
             // One random freq for the whole item so the user hears a single tone
-            // per character/word/callsign, not a new tone per dit/dah.
+            // per character/word/callsign, not a new tone per dit/dah. Same for
+            // the amplitude: volume variation rolls once per item (like a
+            // different station's signal strength), not per element.
             val itemFreq = pickFreq(config)
+            val itemAmp = pickAmp(config)
             if (item.morseOverride != null) {
                 // Prosign: emit the joined morse as a single tight symbol.
                 emitLetterMorse(
@@ -104,6 +108,7 @@ class ScheduleBuilder(
                     label = label,
                     addTrailingIntra = false,
                     itemFreq = itemFreq,
+                    itemAmp = itemAmp,
                 )
                 return
             }
@@ -123,6 +128,7 @@ class ScheduleBuilder(
                         label = label,
                         addTrailingIntra = !isLast,
                         itemFreq = itemFreq,
+                        itemAmp = itemAmp,
                     )
                     if (!isLast) {
                         // Replace the last intra-gap with the inter-character gap.
@@ -159,9 +165,16 @@ class ScheduleBuilder(
         if (config.randomizeFrequency) random.nextInt(config.frequencyMinHz, config.frequencyMaxHz + 1)
         else config.frequencyHz
 
+    /**
+     * Roll one amplitude for a whole item. The 0.35..1.0 span is ~9 dB -
+     * clearly audible as "a weaker station" while the quietest roll still
+     * sits well above any background noise. The previous 0.85..1.0 span
+     * (~1.4 dB) was below the just-noticeable difference and sounded like
+     * the setting did nothing.
+     */
     private fun pickAmp(config: PracticeConfig): Float =
         if (!config.volumeVariationEnabled) 1.0f
-        else 0.85f + random.nextFloat() * 0.15f
+        else 0.35f + random.nextFloat() * 0.65f
 
     /**
      * Apply sloppy-mode jitter to an individual element duration (a dot or

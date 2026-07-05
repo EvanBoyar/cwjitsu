@@ -42,11 +42,11 @@ fun ConfigPanel(
             onValueChange = { onConfigChange(config.copy(characterWpm = it.toInt())) },
         )
 
-        // Farnsworth breaking: optional. When off, the slider is disabled
-        // and `farnsworthWpm` is null. When on, the slider starts at
-        // characterWpm and can be lowered down to that minimum; sliding
-        // all the way to the left always re-disables Farnsworth rather
-        // than clamping the speed to the current charWPM.
+        // Farnsworth spacing: characters stay at the character speed while
+        // the gaps between them are stretched so the OVERALL (effective)
+        // speed drops to this value. It therefore ranges from 5 wpm up to
+        // the character speed; at the character speed the gaps are standard
+        // and Farnsworth has no effect.
         ToggleRow(
             label = "Enable Farnsworth spacing",
             checked = config.farnsworthWpm != null,
@@ -54,12 +54,10 @@ fun ConfigPanel(
                 onConfigChange(
                     config.copy(
                         farnsworthWpm = if (enabled) {
-                            // Pick a default a few wpm above the configured
-                            // character speed so the slider thumb sits
-                            // visibly above charWpm and the user can see
-                            // Farnsworth is actually engaged. Capped at 60
-                            // so it never overflows the slider range.
-                            (config.characterWpm + 5).coerceAtMost(60)
+                            // Default a few wpm BELOW the character speed so
+                            // the stretched spacing is immediately audible,
+                            // floored at the 5 wpm slider minimum.
+                            (config.characterWpm - 5).coerceAtLeast(5)
                         } else null,
                     )
                 )
@@ -67,17 +65,21 @@ fun ConfigPanel(
         )
         val farnsOn = config.farnsworthWpm != null
         LabeledSlider(
-            label = "Farnsworth speed",
-            value = (config.farnsworthWpm ?: config.characterWpm).toFloat(),
-            valueRange = config.characterWpm.toFloat()..60f,
-            steps = (60 - config.characterWpm).coerceAtLeast(0),
-            valueLabel = if (farnsOn) "${config.farnsworthWpm}" else "off",
+            label = "Effective speed (WPM)",
+            value = (config.farnsworthWpm ?: config.characterWpm).toFloat()
+                .coerceAtMost(config.characterWpm.toFloat()),
+            valueRange = 5f..config.characterWpm.toFloat(),
+            steps = (config.characterWpm - 5 - 1).coerceAtLeast(0),
+            // Clamp the label too: a stored value above the character speed
+            // (e.g. saved by an older build) is effectively "no stretching".
+            valueLabel = if (farnsOn) {
+                "${(config.farnsworthWpm ?: 5).coerceAtMost(config.characterWpm)}"
+            } else "off",
             onValueChange = { v ->
                 onConfigChange(config.copy(farnsworthWpm = v.toInt()))
             },
-            // Greys out the slider when Farnsworth is off so the user can
-            // still see the layout but cannot accidentally brush against
-            // the toggle and accidentally clamp Farnsworth to charWPM.
+            // Greyed out while Farnsworth is off so the user can still see
+            // the layout but cannot accidentally change a disabled value.
             enabled = farnsOn,
         )
 
@@ -190,7 +192,7 @@ fun ConfigPanel(
         )
 
         ToggleRow(
-            label = "Volume variation per character",
+            label = "Volume variation per item",
             checked = config.volumeVariationEnabled,
             onCheckedChange = { onConfigChange(config.copy(volumeVariationEnabled = it)) },
         )

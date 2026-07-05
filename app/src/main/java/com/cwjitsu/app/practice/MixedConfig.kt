@@ -24,10 +24,46 @@ package com.cwjitsu.app.practice
  * you'd hear on the air where every other operator is running portable from
  * somewhere else.
  */
+/**
+ * Which characters of a free-text or news item are actually keyed. Anything
+ * filtered out is removed from the sent text before it reaches the schedule
+ * builder; the spoken (TTS) answer keeps the original wording.
+ */
+enum class CharFilter {
+    /** Send everything (anything the Morse table doesn't know is skipped). */
+    EVERYTHING,
+
+    /** Letters and digits only. */
+    LETTERS_NUMBERS,
+
+    /** Letters, digits, and the common punctuation . , ? / */
+    LETTERS_NUMBERS_COMMON;
+
+    fun apply(text: String): String = when (this) {
+        EVERYTHING -> text
+        LETTERS_NUMBERS -> text.filter { it.isLetterOrDigit() || it.isWhitespace() }
+        LETTERS_NUMBERS_COMMON -> text.filter {
+            it.isLetterOrDigit() || it.isWhitespace() || it in COMMON_CHARS
+        }
+    // Dropping characters can leave doubled-up spaces (e.g. " - " with the
+    // dash removed); collapse them so word gaps stay single.
+    }.replace(Regex("\\s+"), " ").trim()
+
+    companion object {
+        const val COMMON_CHARS = ".,?/"
+    }
+}
+
 data class MixedConfig(
     val enabledKinds: Set<ContentKind> = DEFAULT_KINDS,
     val callsignCountries: Set<String> = DEFAULT_COUNTRIES,
     val textSource: String = "",
+    // When true, the Text category sends the whole source text as ONE item
+    // (with normal word gaps inside it) instead of one item per word.
+    val textSendWhole: Boolean = false,
+    // Per-category character filters for the long-form content kinds.
+    val textCharFilter: CharFilter = CharFilter.EVERYTHING,
+    val newsCharFilter: CharFilter = CharFilter.EVERYTHING,
     val callsignRandomPrefix: Boolean = false,
     val callsignRandomSuffix: Boolean = false,
     val characterSet: Set<Char> = DEFAULT_CHARACTER_SET,

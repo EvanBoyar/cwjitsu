@@ -12,17 +12,27 @@ import kotlin.math.roundToLong
 object Timing {
 
     /**
-     * Compute the Farnsworth extension per inter-character / inter-word gap.
+     * Compute the Farnsworth extension per gap dot-unit.
+     *
+     * Farnsworth keeps the characters themselves at [charWpm] and stretches
+     * only the gaps between characters and words so the *overall* effective
+     * speed drops to [farnsworthWpm]. The effective speed must therefore be
+     * SLOWER (lower WPM) than the character speed; an equal-or-faster value
+     * means no stretching at all.
+     *
+     * A PARIS word is 50 dot-units: 31 units of elements + intra-element gaps
+     * (fixed at character speed) and 19 units of inter-character/inter-word
+     * gaps. The extra time per word, (60000/fw - 60000/cw) ms, is spread
+     * evenly over those 19 gap units.
      *
      * @param charWpm Character WPM.
-     * @param farnsworthWpm Effective Farnsworth WPM (>= charWpm). If null, no Farnsworth.
+     * @param farnsworthWpm Effective overall WPM (< charWpm). If null, no Farnsworth.
      */
     fun farnsworthExtensionMs(charWpm: Int, farnsworthWpm: Int?): Long {
         val fw = farnsworthWpm ?: return 0L
-        if (fw <= charWpm) return 0L
+        if (fw >= charWpm) return 0L
         val cwMs = 60_000.0 / charWpm
         val fwMs = 60_000.0 / fw
-        // ARRL convention: 19 element spaces per standard word.
         return ((fwMs - cwMs) / 19.0).roundToLong().coerceAtLeast(0L)
     }
 

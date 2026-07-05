@@ -20,6 +20,8 @@ object ContentMixer {
         nato: Boolean = true,
         callsignCountries: Set<String> = MixedConfig.DEFAULT_COUNTRIES,
         textSource: String = "",
+        textSendWhole: Boolean = false,
+        textCharFilter: CharFilter = CharFilter.EVERYTHING,
         callsignRandomPrefix: Boolean = false,
         callsignRandomSuffix: Boolean = false,
         characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
@@ -56,7 +58,13 @@ object ContentMixer {
                 ContentKind.WORDS -> out.addAll(WordContentGenerator(words).batch(1))
                 ContentKind.TEXT -> {
                     if (textSource.isNotBlank()) {
-                        out.addAll(TextContentGenerator().fromUserText(textSource, nato))
+                        out.addAll(
+                            TextContentGenerator().fromUserText(
+                                textSource, nato,
+                                sendWhole = textSendWhole,
+                                filter = textCharFilter,
+                            )
+                        )
                     }
                 }
                 ContentKind.CALLSIGNS -> {

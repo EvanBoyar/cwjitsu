@@ -86,6 +86,7 @@ import com.cwjitsu.app.data.NewsStatus
 import com.cwjitsu.app.data.WordDictionary
 import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
+import com.cwjitsu.app.practice.CharFilter
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
@@ -242,7 +243,13 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         scope.launch {
             app.settings.updateMixedConfig { c ->
                 if (normalized in c.customNewsFeeds) c
-                else c.copy(customNewsFeeds = c.customNewsFeeds + normalized)
+                else c.copy(
+                    customNewsFeeds = c.customNewsFeeds + normalized,
+                    // A freshly added feed starts enabled - adding it is the
+                    // clearest possible signal the user wants to hear it.
+                    enabledNewsSources = c.enabledNewsSources +
+                        (NewsSource.CUSTOM_PREFIX + normalized),
+                )
             }
             refreshNews()
         }
@@ -251,13 +258,29 @@ fun HomeScreen(onPickSettings: () -> Unit) {
     fun removeCustomFeed(url: String) {
         scope.launch {
             app.settings.updateMixedConfig { c ->
-                c.copy(customNewsFeeds = c.customNewsFeeds - url)
+                c.copy(
+                    customNewsFeeds = c.customNewsFeeds - url,
+                    enabledNewsSources = c.enabledNewsSources -
+                        (NewsSource.CUSTOM_PREFIX + url),
+                )
             }
         }
     }
 
     fun setNewsNoRepeat(enabled: Boolean) {
         scope.launch { app.settings.updateMixedConfig { it.copy(newsNoRepeat = enabled) } }
+    }
+
+    fun setNewsCharFilter(filter: CharFilter) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(newsCharFilter = filter) } }
+    }
+
+    fun setTextSendWhole(whole: Boolean) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(textSendWhole = whole) } }
+    }
+
+    fun setTextCharFilter(filter: CharFilter) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(textCharFilter = filter) } }
     }
 
     fun setProsignsEnabled(enabled: Boolean) {
@@ -288,7 +311,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 .mapTo(mutableSetOf()) { it.name }
             app.news.nextHeadline(allowedSources)?.let { h ->
                 ContentItem(
-                    text = sanitizeHeadline(h.title),
+                    // The character filter trims what gets keyed; the spoken
+                    // answer keeps the original headline wording.
+                    text = current.newsCharFilter.apply(sanitizeHeadline(h.title)),
                     spokenAnswer = h.title,
                     singleShot = current.newsNoRepeat,
                 )
@@ -301,6 +326,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
             textSource = current.textSource,
+            textSendWhole = current.textSendWhole,
+            textCharFilter = current.textCharFilter,
             callsignRandomPrefix = current.callsignRandomPrefix,
             callsignRandomSuffix = current.callsignRandomSuffix,
             characterPool = current.characterSet,
@@ -400,7 +427,10 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     isPaused = isPaused,
                     onPlayPause = {
                         when {
-                            !isRunning -> orchestrator.start(regenerator, config)
+                            // Hand the orchestrator the live settings flow
+                            // (not a snapshot) so mid-session edits apply
+                            // without a stop/start.
+                            !isRunning -> orchestrator.start(regenerator, app.settings.configFlow)
                             isPaused -> orchestrator.resume()
                             else -> orchestrator.pause()
                         }
@@ -558,10 +588,12 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     enabledSources = effectiveConfig.enabledNewsSources,
                     customFeeds = effectiveConfig.customNewsFeeds,
                     noRepeat = effectiveConfig.newsNoRepeat,
+                    charFilter = effectiveConfig.newsCharFilter,
                     onToggleSource = { toggleNewsSource(it) },
                     onAddFeed = { addCustomFeed(it) },
                     onRemoveFeed = { removeCustomFeed(it) },
                     onSetNoRepeat = { setNewsNoRepeat(it) },
+                    onSetCharFilter = { setNewsCharFilter(it) },
                     onRefresh = { refreshNews() },
                 )
             }
@@ -699,7 +731,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 }
             }
 
-            // Per-category settings: source text for TEXT.
+            // Per-category settings: source text for TEXT, plus how it is
+            // sent (word-by-word vs whole) and which characters are keyed.
             if (ContentKind.TEXT in effectiveConfig.enabledKinds) {
                 Text(
                     "Text source",
@@ -709,6 +742,32 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     savedConfig = savedConfig,
                     effectiveText = effectiveConfig.textSource,
                     app = app,
+                )
+
+                Text("Sending", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !effectiveConfig.textSendWhole,
+                        onClick = { setTextSendWhole(false) },
+                        label = { Text("Word by word") },
+                    )
+                    FilterChip(
+                        selected = effectiveConfig.textSendWhole,
+                        onClick = { setTextSendWhole(true) },
+                        label = { Text("Whole text at once") },
+                    )
+                }
+                Text(
+                    "Word by word treats each word as its own item (answered and " +
+                        "repeated individually). Whole text sends everything as one item.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+
+                Text("Characters to send", style = MaterialTheme.typography.titleSmall)
+                CharFilterChips(
+                    selected = effectiveConfig.textCharFilter,
+                    onSelect = { setTextCharFilter(it) },
                 )
             }
 
@@ -976,10 +1035,12 @@ private fun NewsSettings(
     enabledSources: Set<String>,
     customFeeds: List<String>,
     noRepeat: Boolean,
+    charFilter: CharFilter,
     onToggleSource: (String) -> Unit,
     onAddFeed: (String) -> Unit,
     onRemoveFeed: (String) -> Unit,
     onSetNoRepeat: (Boolean) -> Unit,
+    onSetCharFilter: (CharFilter) -> Unit,
     onRefresh: () -> Unit,
 ) {
     // Warm the cache when the panel first appears (e.g. just after the user
@@ -1029,6 +1090,15 @@ private fun NewsSettings(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
 
+        Text("Characters to send", style = MaterialTheme.typography.titleSmall)
+        CharFilterChips(selected = charFilter, onSelect = onSetCharFilter)
+        Text(
+            "Filtered-out characters are dropped from the code; the spoken " +
+                "headline is unchanged.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+
         Text("Sources", style = MaterialTheme.typography.titleSmall)
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -1052,17 +1122,22 @@ private fun NewsSettings(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             )
         } else {
+            // Each custom feed gets the same select/deselect chip as the
+            // built-in sources (keyed by its "custom:<url>" id), plus a
+            // remove button to delete it entirely.
             customFeeds.forEach { feed ->
+                val src = NewsSource.custom(feed)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        NewsSource.hostLabel(feed),
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
+                    FilterChip(
+                        selected = src.id in enabledSources,
+                        onClick = { onToggleSource(src.id) },
+                        label = { Text(src.name, maxLines = 1) },
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+                    Spacer(modifier = Modifier.weight(1f))
                     IconButton(onClick = { onRemoveFeed(feed) }) {
                         Icon(Icons.Filled.Close, contentDescription = "Remove feed")
                     }
@@ -1087,6 +1162,39 @@ private fun NewsSettings(
                 onClick = { onAddFeed(newFeed); newFeed = "" },
                 enabled = newFeed.isNotBlank(),
             ) { Text("Add") }
+        }
+    }
+}
+
+/**
+ * Three-way chip row picking a [CharFilter]. Shared by the Text and News
+ * per-category settings.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CharFilterChips(
+    selected: CharFilter,
+    onSelect: (CharFilter) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        CharFilter.entries.forEach { filter ->
+            FilterChip(
+                selected = selected == filter,
+                onClick = { onSelect(filter) },
+                label = {
+                    Text(
+                        when (filter) {
+                            CharFilter.EVERYTHING -> "Everything"
+                            CharFilter.LETTERS_NUMBERS -> "A-Z 0-9"
+                            CharFilter.LETTERS_NUMBERS_COMMON -> "A-Z 0-9 . , ? /"
+                        }
+                    )
+                },
+            )
         }
     }
 }

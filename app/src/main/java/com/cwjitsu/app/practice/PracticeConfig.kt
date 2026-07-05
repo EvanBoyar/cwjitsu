@@ -72,5 +72,9 @@ data class PracticeConfig(
         require(repetitions in 1..20)
     }
 
-    fun effectiveFarnsworth(): Int? = farnsworthWpm?.takeIf { it >= characterWpm }
+    /**
+     * Farnsworth stretches gaps to slow the overall speed below the character
+     * speed, so only a value strictly below [characterWpm] has any effect.
+     */
+    fun effectiveFarnsworth(): Int? = farnsworthWpm?.takeIf { it < characterWpm }
 }

@@ -13,8 +13,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
@@ -85,7 +87,14 @@ class SessionOrchestrator(
 
     private var job: Job? = null
 
-    fun start(regenerator: ContentRegenerator, config: PracticeConfig) {
+    /**
+     * Start a session. [configFlow] is the live settings flow rather than a
+     * one-shot snapshot: the loop re-reads it before every item, so settings
+     * changes apply from the very next send, and a collector pushes each
+     * emission straight into the engine so audio-level knobs (master volume,
+     * noise) change in real time - no stop/start required.
+     */
+    fun start(regenerator: ContentRegenerator, configFlow: Flow<PracticeConfig>) {
         stop()
         Log.d(TAG, "start regenerator")
         _paused.value = false
@@ -95,6 +104,8 @@ class SessionOrchestrator(
             _state.value = RunnerState.RUNNING
             // Fresh session starts with a blank now-playing window.
             _nowPlaying.value = NowPlaying()
+            // Live-apply settings to the engine for the whole session.
+            launch { configFlow.collect { engine.updateConfig(it) } }
             // The queue holds every item of the session (bounded by the
             // history trim) with an explicit play position, so Previous can
             // step back across batch boundaries and Next/normal advance is
@@ -104,6 +115,8 @@ class SessionOrchestrator(
             var position = 0
             try {
             while (isActive) {
+                // Fresh config every round so edits apply on the next send.
+                val config = configFlow.first()
                 if (position >= queue.size) {
                     val items = regenerator(config)
                     Log.d(TAG, "round items.size=${items.size}")
@@ -353,6 +366,18 @@ class SessionOrchestrator(
             if (config.answerEnabled) delay(400)
             playCourtesyTone(config)
             Log.d(TAG, "playCourtesyTone EXIT")
+
+            // Pause AFTER the courtesy tone too, so the pip reads as the end
+            // of this item rather than the start of the next one. This
+            // deliberately reuses the answer-delay setting instead of adding
+            // another knob: the answer delay is already the user's "breathing
+            // room around the answer" value, the pip belongs to that same
+            // end-of-item sequence, and when answers are disabled the setting
+            // would otherwise be dead weight - here it still shapes the gap
+            // between items.
+            if (skipRequested || previousRequested) return
+            awaitResume()
+            delay(config.answerDelayMs)
         }
         Log.d(TAG, "playItem EXIT text='${item.text}'")
     }
@@ -371,11 +396,11 @@ class SessionOrchestrator(
         val toneSamples = (50L * engine.sampleRate / 1000)
             .toInt()
             .coerceAtLeast(1)
-        // Pick the midpoint of the practice-tone amplitude range so the
-        // courtesy tone sits at roughly the same level as the rest of
-        // the session, not louder. Bypassing Master/volume-variation
-        // would otherwise make the courtesy tone pop out awkwardly.
-        val courtesyAmp = if (config.volumeVariationEnabled) 0.92f else 1.0f
+        // Pick the midpoint of the practice-tone amplitude range (now
+        // 0.35..1.0 per item) so the courtesy tone sits at roughly the same
+        // level as the rest of the session, not louder. Bypassing
+        // Master/volume-variation would otherwise make it pop out awkwardly.
+        val courtesyAmp = if (config.volumeVariationEnabled) 0.7f else 1.0f
         // 30 ms silent warm-up. Android's native AudioFlinger mixer
         // routinely swallows the first ~10-40 ms of a freshly created
         // AudioTrack while its resampler and output stage spin up. For

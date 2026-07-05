@@ -9,9 +9,11 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.cwjitsu.app.practice.CallsignRegistry
+import com.cwjitsu.app.practice.CharFilter
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.Morse
+import com.cwjitsu.app.practice.NewsSource
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
@@ -175,6 +177,9 @@ class SettingsRepository(private val context: Context) {
         }
         o.put("callsignCountries", countries)
         o.put("textSource", config.textSource)
+        o.put("textSendWhole", config.textSendWhole)
+        o.put("textCharFilter", config.textCharFilter.name)
+        o.put("newsCharFilter", config.newsCharFilter.name)
         // Independent toggles for occasional host-country /prefix and
         // portable-status /suffix. Older saved configs predate the
         // split toggle - see the parse side for the migration logic.
@@ -196,6 +201,10 @@ class SettingsRepository(private val context: Context) {
         val feeds = JSONArray()
         for (f in config.customNewsFeeds) feeds.put(f)
         o.put("customNewsFeeds", feeds)
+        // Marks that enabledNewsSources also covers custom feeds (by their
+        // "custom:<url>" ids). Configs saved before this flag existed treated
+        // custom feeds as always-on - see the parse-side migration.
+        o.put("newsSelectV2", true)
         o.put("newsNoRepeat", config.newsNoRepeat)
         return o.toString()
     }
@@ -219,6 +228,15 @@ class SettingsRepository(private val context: Context) {
             .mapNotNull { i -> countriesArr.optString(i).takeIf { it.isNotEmpty() } }
             .toSet()
         val text = o.optString("textSource")
+        // Absent keys (configs saved before these settings existed) fall back
+        // to the previous behavior: word-by-word, no character filtering.
+        val textSendWhole = o.optBoolean("textSendWhole", false)
+        val textCharFilter = CharFilter.entries
+            .firstOrNull { it.name == o.optString("textCharFilter") }
+            ?: CharFilter.EVERYTHING
+        val newsCharFilter = CharFilter.entries
+            .firstOrNull { it.name == o.optString("newsCharFilter") }
+            ?: CharFilter.EVERYTHING
         // Migration: a previous "combined" toggle stored decoration
         // choices under the single key `callsignRandomDecoration`.
         // If BOTH new per-side keys are absent, fall back to the
@@ -262,6 +280,15 @@ class SettingsRepository(private val context: Context) {
         val customFeedsArr = o.optJSONArray("customNewsFeeds") ?: JSONArray()
         val customNewsFeeds = (0 until customFeedsArr.length())
             .mapNotNull { customFeedsArr.optString(it).takeIf { s -> s.isNotEmpty() } }
+        // Migration: before newsSelectV2, custom feeds were always-on and
+        // enabledNewsSources only covered built-ins. Seed every existing
+        // custom feed's id as enabled so behavior doesn't change on upgrade;
+        // the flag is written on every save, so this runs exactly once.
+        val migratedNewsSources = if (o.optBoolean("newsSelectV2", false)) {
+            enabledNewsSources
+        } else {
+            enabledNewsSources + customNewsFeeds.map { NewsSource.CUSTOM_PREFIX + it }
+        }
         val newsNoRepeat = o.optBoolean("newsNoRepeat", true)
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
@@ -271,6 +298,9 @@ class SettingsRepository(private val context: Context) {
             enabledKinds = kinds,
             callsignCountries = countries,
             textSource = text,
+            textSendWhole = textSendWhole,
+            textCharFilter = textCharFilter,
+            newsCharFilter = newsCharFilter,
             callsignRandomPrefix = if (hasNewPrefix)
                 o.optBoolean("callsignRandomPrefix", false)
             else legacy,
@@ -280,7 +310,7 @@ class SettingsRepository(private val context: Context) {
             characterSet = characterSet,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,
-            enabledNewsSources = enabledNewsSources,
+            enabledNewsSources = migratedNewsSources,
             customNewsFeeds = customNewsFeeds,
             newsNoRepeat = newsNoRepeat,
         )

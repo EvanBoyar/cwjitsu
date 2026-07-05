@@ -114,17 +114,39 @@ class WordContentGenerator(
 }
 
 /**
- * Free text generator: returns the user's string parsed as one or more practice
- * items, grouped by whitespace. Each word becomes its own [ContentItem].
+ * Free text generator: returns the user's string as practice items.
  *
- * When [nato] is true, the spoken answer is each word NATO-spelled. When false,
- * the spoken answer is the word itself so the TTS engine pronounces it as a
- * natural word.
+ * With [sendWhole] false (default), the text splits on whitespace and each
+ * word becomes its own [ContentItem] - answered and repeated individually.
+ * With [sendWhole] true, the whole text is ONE item; the schedule builder
+ * inserts proper word gaps inside a multi-word item, so the text is keyed
+ * continuously like a news headline.
+ *
+ * [filter] trims the keyed characters down (e.g. letters+digits only) before
+ * anything is split; the spoken answer is built from the same filtered text
+ * so the answer matches what was actually sent.
+ *
+ * When [nato] is true, the spoken answer is NATO-spelled. When false, the
+ * spoken answer is the text itself so the TTS engine pronounces natural words.
  */
 class TextContentGenerator {
-    fun fromUserText(input: String, nato: Boolean = true): List<ContentItem> {
-        val raw = input.uppercase().replace(Regex("[^A-Z0-9 .,?/\"]+"), " ")
-        return raw.split(Regex("\\s+"))
+    fun fromUserText(
+        input: String,
+        nato: Boolean = true,
+        sendWhole: Boolean = false,
+        filter: CharFilter = CharFilter.EVERYTHING,
+    ): List<ContentItem> {
+        val cleaned = filter.apply(input.uppercase())
+        if (cleaned.isBlank()) return emptyList()
+        if (sendWhole) {
+            return listOf(
+                ContentItem(
+                    text = cleaned,
+                    spokenAnswer = if (nato) Morse.natoFor(cleaned) else cleaned,
+                )
+            )
+        }
+        return cleaned.split(Regex("\\s+"))
             .filter { it.isNotBlank() }
             .map { word ->
                 ContentItem(
