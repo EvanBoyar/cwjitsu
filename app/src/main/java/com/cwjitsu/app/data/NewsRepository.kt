@@ -135,10 +135,17 @@ class NewsRepository(private val context: Context) {
     suspend fun refreshAndAwait(feeds: List<NewsSource>, force: Boolean = false) =
         doRefresh(feeds, force)
 
-    private suspend fun doRefresh(feeds: List<NewsSource>, force: Boolean) {
+    // The whole refresh runs on IO regardless of the caller's dispatcher:
+    // callers include UI coroutine scopes (main thread), and the feed
+    // fetches inside would otherwise inherit that dispatcher and die with
+    // NetworkOnMainThreadException.
+    private suspend fun doRefresh(
+        feeds: List<NewsSource>,
+        force: Boolean,
+    ): Unit = withContext(Dispatchers.IO) {
         if (feeds.isEmpty()) {
             setStatus(message = "No sources selected.")
-            return
+            return@withContext
         }
         // Rate limit: automatic triggers (panel shown, app launch) re-use a
         // recent cache instead of re-downloading every feed. The explicit
@@ -148,14 +155,14 @@ class NewsRepository(private val context: Context) {
                 pool.isNotEmpty() && updatedAtMillis
                     ?.let { System.currentTimeMillis() - it < MIN_REFRESH_INTERVAL_MS } == true
             }
-            if (recentEnough) return
+            if (recentEnough) return@withContext
         }
         if (!hasNetwork()) {
             setStatus(
                 message = if (poolSize() == 0) "Offline - no headlines yet."
                           else "Offline - using saved headlines.",
             )
-            return
+            return@withContext
         }
         _status.value = _status.value.copy(refreshing = true, message = null)
         val results: List<Pair<NewsSource, List<Headline>>> = coroutineScope {
@@ -173,7 +180,7 @@ class NewsRepository(private val context: Context) {
                 message = if (poolSize() == 0) "Couldn't load any headlines."
                           else "Couldn't refresh - using saved headlines.",
             )
-            return
+            return@withContext
         }
         merge(results, knownIds = feeds.mapTo(HashSet()) { it.id })
         persist()
