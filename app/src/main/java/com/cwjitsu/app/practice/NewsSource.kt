@@ -75,9 +75,16 @@ object NewsSources {
         BUILT_IN + customUrls.map { NewsSource.custom(it) }
 }
 
-/** One parsed headline. [id] is a stable key (feed guid/link, else a hash). */
+/**
+ * One parsed headline. [id] is a stable key (feed guid/link, else a hash).
+ * [sourceId] is the owning [NewsSource.id] - the SAME key the enable-toggles
+ * use, so playback eligibility and cache replacement are keyed by identity,
+ * not by display name (names collide: two custom feeds on one host share a
+ * host label). [sourceName] is kept purely for display/logging.
+ */
 data class Headline(
     val id: String,
     val title: String,
+    val sourceId: String,
     val sourceName: String,
 )

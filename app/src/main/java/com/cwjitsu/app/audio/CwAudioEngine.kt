@@ -224,6 +224,16 @@ class CwAudioEngine(
                         }
                     }
                 }
+                // A user-level pause with no noise bed can last hours; keep
+                // mixing zero blocks and the audio pipeline never sleeps.
+                // Park the track instead and poll cheaply until resumed.
+                // Short between-item idles (TTS, delays) never enter here
+                // because their engine state is STOPPED, not PAUSED - so the
+                // warm-track guarantee for normal playback is untouched.
+                if (_state.value == State.PAUSED && !noiseAudible(cfg)) {
+                    idleWhilePaused(track)
+                    continue
+                }
                 renderNoiseOnly(noiseBuf, pcm, cfg, ns)
                 track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
                 continue
@@ -231,7 +241,14 @@ class CwAudioEngine(
 
             renderBlock(block, noiseBuf, pcm, sched, pos, cfg, ns)
             val written = track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
-            if (written < 0) break
+            if (written < 0) {
+                // The track died (device change, mediaserver restart). Flip
+                // to STOPPED so waiters (waitForAudioToFinish) are released
+                // instead of waiting on a play position that will never
+                // advance again.
+                _state.value = State.STOPPED
+                break
+            }
 
             synchronized(lock) {
                 if (curSchedule === sched) {
@@ -239,6 +256,32 @@ class CwAudioEngine(
                     samplesElapsed = playPos
                 }
             }
+        }
+    }
+
+    private fun noiseAudible(cfg: PracticeConfig): Boolean =
+        cfg.noiseType != NoiseType.NONE && cfg.noiseVolume > 0f
+
+    /**
+     * Pause the AudioTrack for the duration of a noise-free user pause so
+     * the audio HAL can sleep, then re-warm it on resume. A 50 ms poll while
+     * parked is orders of magnitude cheaper than mixing 43 blocks of zeros
+     * per second. Exits early if the session tears down or the user turns
+     * a noise bed on mid-pause.
+     */
+    private fun idleWhilePaused(track: AudioTrack) {
+        try { track.pause() } catch (_: IllegalStateException) { return }
+        while (sessionRunning && _state.value == State.PAUSED &&
+            !synchronized(lock) { noiseAudible(curConfig) }
+        ) {
+            try { Thread.sleep(50) } catch (_: InterruptedException) { return }
+        }
+        if (!sessionRunning) return
+        try { track.play() } catch (_: IllegalStateException) { return }
+        // Two silence blocks (~46 ms) so devices that swallow the first
+        // milliseconds after play() don't clip the resumed tone.
+        repeat(2) {
+            track.write(silencePcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
         }
     }
 
@@ -253,7 +296,7 @@ class CwAudioEngine(
         cfg: PracticeConfig,
         ns: NoiseGenerator,
     ) {
-        if (cfg.noiseType == NoiseType.NONE || cfg.noiseVolume <= 0f) {
+        if (!noiseAudible(cfg)) {
             pcm.fill(0)
             return
         }

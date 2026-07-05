@@ -53,14 +53,7 @@ class CWJitsuApp : Application() {
         // on launch (typically on Wi-Fi before heading underground). The
         // NewsRepository already loaded any saved cache from disk, so this only
         // refreshes it; when offline the refresh fails fast and the cache stays.
-        orchestratorScope.launch {
-            val cfg = settings.mixedConfigFlow.first() ?: MixedConfig()
-            if (ContentKind.NEWS in cfg.enabledKinds) {
-                // Download every feed, not just the enabled ones, so toggling
-                // a source on later (possibly offline) already has content.
-                news.refresh(NewsSources.all(cfg.customNewsFeeds))
-            }
-        }
+        orchestratorScope.launch { refreshNewsIfEnabled() }
 
         // Once per launch: see if a newer tagged release exists on GitHub.
         // Suppressible from Settings; failures (e.g. offline) are silent.
@@ -71,6 +64,21 @@ class CWJitsuApp : Application() {
         }
 
         scheduleDailyNewsRefresh()
+    }
+
+    /**
+     * Refresh the news cache if the News category is enabled. The single
+     * entry point for every refresh trigger (app launch, the News panel,
+     * the daily worker), so the shared rules live in one place: only spend
+     * the user's data when they actually practise news, and download EVERY
+     * feed - not just the enabled ones - so toggling a source on later
+     * (possibly offline by then) already has its headlines cached.
+     * Un-forced calls are additionally rate-limited by the repository.
+     */
+    suspend fun refreshNewsIfEnabled(force: Boolean = false) {
+        val cfg = settings.mixedConfigFlow.first() ?: MixedConfig()
+        if (ContentKind.NEWS !in cfg.enabledKinds) return
+        news.refreshAndAwait(NewsSources.all(cfg.customNewsFeeds), force)
     }
 
     /**

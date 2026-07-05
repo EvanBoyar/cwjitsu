@@ -1,6 +1,5 @@
 package com.cwjitsu.app.practice
 
-import kotlin.math.max
 import kotlin.math.roundToLong
 
 /**
@@ -70,6 +69,4 @@ data class Timings(
     val interCharGapMs: Long,
     val interWordGapMs: Long,
     val extensionMs: Long,
-) {
-    val maxGapMs: Long get() = max(interCharGapMs, interWordGapMs)
-}
+)

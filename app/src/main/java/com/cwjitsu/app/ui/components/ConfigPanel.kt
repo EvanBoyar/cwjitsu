@@ -21,13 +21,18 @@ import com.cwjitsu.app.practice.SloppyMode
 
 /**
  * Reusable Compose panel that exposes the whole [PracticeConfig] to the user.
- * Each practice screen embeds one copy near the top, and the user can adjust the
- * common knobs without leaving the screen.
+ *
+ * Edits are emitted as TRANSFORMS ([onUpdate] receives a `(config) -> config`
+ * lambda) rather than full replacement objects, so the caller can apply them
+ * atomically against the freshly-read stored config. Building a replacement
+ * from the collected [config] snapshot would race concurrent edits - and,
+ * before DataStore's first emission, would overwrite every saved setting
+ * with constructor defaults.
  */
 @Composable
 fun ConfigPanel(
     config: PracticeConfig,
-    onConfigChange: (PracticeConfig) -> Unit,
+    onUpdate: ((PracticeConfig) -> PracticeConfig) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -39,7 +44,7 @@ fun ConfigPanel(
             valueRange = 5f..60f,
             steps = 54,
             valueLabel = "${config.characterWpm}",
-            onValueChange = { onConfigChange(config.copy(characterWpm = it.toInt())) },
+            onValueChange = { v -> onUpdate { it.copy(characterWpm = v.toInt()) } },
         )
 
         // Farnsworth spacing: characters stay at the character speed while
@@ -51,16 +56,16 @@ fun ConfigPanel(
             label = "Enable Farnsworth spacing",
             checked = config.farnsworthWpm != null,
             onCheckedChange = { enabled ->
-                onConfigChange(
-                    config.copy(
+                onUpdate {
+                    it.copy(
                         farnsworthWpm = if (enabled) {
                             // Default a few wpm BELOW the character speed so
                             // the stretched spacing is immediately audible,
                             // floored at the 5 wpm slider minimum.
-                            (config.characterWpm - 5).coerceAtLeast(5)
+                            (it.characterWpm - 5).coerceAtLeast(5)
                         } else null,
                     )
-                )
+                }
             },
         )
         val farnsOn = config.farnsworthWpm != null
@@ -75,9 +80,7 @@ fun ConfigPanel(
             valueLabel = if (farnsOn) {
                 "${(config.farnsworthWpm ?: 5).coerceAtMost(config.characterWpm)}"
             } else "off",
-            onValueChange = { v ->
-                onConfigChange(config.copy(farnsworthWpm = v.toInt()))
-            },
+            onValueChange = { v -> onUpdate { it.copy(farnsworthWpm = v.toInt()) } },
             // Greyed out while Farnsworth is off so the user can still see
             // the layout but cannot accidentally change a disabled value.
             enabled = farnsOn,
@@ -95,7 +98,7 @@ fun ConfigPanel(
             valueRange = 0f..5f,
             steps = 4,
             valueLabel = "${config.repetitions - 1}",
-            onValueChange = { onConfigChange(config.copy(repetitions = it.toInt() + 1)) },
+            onValueChange = { v -> onUpdate { it.copy(repetitions = v.toInt() + 1) } },
             dimmed = config.repetitions - 1 == 0,
         )
 
@@ -105,7 +108,7 @@ fun ConfigPanel(
             valueRange = 0f..5000f,
             steps = 49,
             valueLabel = "${config.postSendPauseMs}ms",
-            onValueChange = { onConfigChange(config.copy(postSendPauseMs = it.toLong())) },
+            onValueChange = { v -> onUpdate { it.copy(postSendPauseMs = v.toLong()) } },
         )
 
         LabeledSlider(
@@ -114,13 +117,13 @@ fun ConfigPanel(
             valueRange = 0f..5000f,
             steps = 49,
             valueLabel = "${config.answerDelayMs}ms",
-            onValueChange = { onConfigChange(config.copy(answerDelayMs = it.toLong())) },
+            onValueChange = { v -> onUpdate { it.copy(answerDelayMs = v.toLong()) } },
         )
 
         ToggleRow(
             label = "Speak the answer",
             checked = config.answerEnabled,
-            onCheckedChange = { onConfigChange(config.copy(answerEnabled = it)) },
+            onCheckedChange = { on -> onUpdate { it.copy(answerEnabled = on) } },
         )
 
         // One-shot replay of the code after the spoken answer. The
@@ -130,13 +133,13 @@ fun ConfigPanel(
         ToggleRow(
             label = "Replay code after answer",
             checked = config.replayAfterAnswer,
-            onCheckedChange = { onConfigChange(config.copy(replayAfterAnswer = it)) },
+            onCheckedChange = { on -> onUpdate { it.copy(replayAfterAnswer = on) } },
         )
 
         ToggleRow(
             label = "Courtesy tone after sequence",
             checked = config.courtesyToneEnabled,
-            onCheckedChange = { onConfigChange(config.copy(courtesyToneEnabled = it)) },
+            onCheckedChange = { on -> onUpdate { it.copy(courtesyToneEnabled = on) } },
         )
 
         Text(
@@ -145,7 +148,7 @@ fun ConfigPanel(
         )
         SloppyModeRow(
             current = config.sloppyMode,
-            onSelect = { onConfigChange(config.copy(sloppyMode = it)) },
+            onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
         )
 
         LabeledSlider(
@@ -154,23 +157,29 @@ fun ConfigPanel(
             valueRange = 300f..1500f,
             steps = 119,
             valueLabel = "${config.frequencyHz}Hz",
-            onValueChange = { onConfigChange(config.copy(frequencyHz = it.toInt())) },
+            onValueChange = { v -> onUpdate { it.copy(frequencyHz = v.toInt()) } },
         )
 
         ToggleRow(
             label = "Randomize tone frequency",
             checked = config.randomizeFrequency,
-            onCheckedChange = { onConfigChange(config.copy(randomizeFrequency = it)) },
+            onCheckedChange = { on -> onUpdate { it.copy(randomizeFrequency = on) } },
         )
 
         if (config.randomizeFrequency) {
+            // Each bound clamps against the other so min can never cross
+            // above max: PracticeConfig requires min <= max, and an
+            // unconstrained pair of sliders used to make that invariant
+            // trivially violable (crashing in the copy() call).
             LabeledSlider(
                 label = "Random frequency min",
                 value = config.frequencyMinHz.toFloat(),
                 valueRange = 300f..1500f,
                 steps = 119,
                 valueLabel = "${config.frequencyMinHz}Hz",
-                onValueChange = { onConfigChange(config.copy(frequencyMinHz = it.toInt())) },
+                onValueChange = { v ->
+                    onUpdate { it.copy(frequencyMinHz = v.toInt().coerceAtMost(it.frequencyMaxHz)) }
+                },
             )
             LabeledSlider(
                 label = "Random frequency max",
@@ -178,7 +187,9 @@ fun ConfigPanel(
                 valueRange = 300f..1500f,
                 steps = 119,
                 valueLabel = "${config.frequencyMaxHz}Hz",
-                onValueChange = { onConfigChange(config.copy(frequencyMaxHz = it.toInt())) },
+                onValueChange = { v ->
+                    onUpdate { it.copy(frequencyMaxHz = v.toInt().coerceAtLeast(it.frequencyMinHz)) }
+                },
             )
         }
 
@@ -188,13 +199,13 @@ fun ConfigPanel(
             valueRange = 0f..1f,
             steps = 99,
             valueLabel = "%.0f%%".format(config.masterVolume * 100),
-            onValueChange = { onConfigChange(config.copy(masterVolume = it)) },
+            onValueChange = { v -> onUpdate { it.copy(masterVolume = v) } },
         )
 
         ToggleRow(
             label = "Volume variation per item",
             checked = config.volumeVariationEnabled,
-            onCheckedChange = { onConfigChange(config.copy(volumeVariationEnabled = it)) },
+            onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
         )
 
         Text("Background noise", style = MaterialTheme.typography.titleLarge)
@@ -202,7 +213,7 @@ fun ConfigPanel(
             NoiseRow(
                 label = t.name,
                 selected = config.noiseType == t,
-                onSelect = { onConfigChange(config.copy(noiseType = t)) },
+                onSelect = { onUpdate { it.copy(noiseType = t) } },
             )
         }
 
@@ -212,7 +223,7 @@ fun ConfigPanel(
             valueRange = 0f..1f,
             steps = 99,
             valueLabel = "%.0f%%".format(config.noiseVolume * 100),
-            onValueChange = { onConfigChange(config.copy(noiseVolume = it)) },
+            onValueChange = { v -> onUpdate { it.copy(noiseVolume = v) } },
         )
     }
 }
@@ -297,8 +308,12 @@ private fun SloppyModeRow(
     }
 }
 
+/**
+ * Shared label + switch row. Public so per-category settings on the Home
+ * screen use the same row instead of re-inlining it.
+ */
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
         Switch(checked = checked, onCheckedChange = onCheckedChange, colors = cwSwitchColors())

@@ -1,6 +1,5 @@
 package com.cwjitsu.app.audio
 
-import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
@@ -34,14 +33,5 @@ class NoiseGenerator(
 
     fun reset() {
         brownState = 0f
-    }
-
-    companion object {
-        @Suppress("unused")
-        fun normalisedGain(type: com.cwjitsu.app.practice.NoiseType): Float = when (type) {
-            com.cwjitsu.app.practice.NoiseType.WHITE -> 1.0f / sqrt(2.0).toFloat()
-            com.cwjitsu.app.practice.NoiseType.BROWN -> 1.5f / sqrt(2.0).toFloat()
-            com.cwjitsu.app.practice.NoiseType.NONE -> 0f
-        }
     }
 }

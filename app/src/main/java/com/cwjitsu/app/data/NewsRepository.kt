@@ -7,6 +7,7 @@ import android.util.Log
 import android.util.Xml
 import com.cwjitsu.app.practice.Headline
 import com.cwjitsu.app.practice.NewsSource
+import com.cwjitsu.app.practice.NewsSources
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,18 @@ class NewsRepository(private val context: Context) {
         private const val TOTAL_LIMIT = 500
         private const val CONNECT_TIMEOUT_MS = 8000
         private const val READ_TIMEOUT_MS = 8000
+
+        // Un-forced refreshes within this window of the last successful one
+        // are skipped. The News panel triggers a refresh every time it
+        // appears; without a floor, hopping between screens re-downloads
+        // every feed each time (data + battery for identical headlines).
+        private const val MIN_REFRESH_INTERVAL_MS = 10 * 60_000L
+
+        // Shuffle-bag progress is persisted at most this often (plus on
+        // every merge). Persisting on every single draw meant a full-cache
+        // JSON write to flash every few seconds during a news session; at
+        // worst this floor loses a few draws of "already played" state.
+        private const val BAG_PERSIST_INTERVAL_MS = 30_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -68,6 +81,7 @@ class NewsRepository(private val context: Context) {
     private val playedIds = mutableSetOf<String>()
     private var lastId: String? = null
     private var updatedAtMillis: Long? = null
+    private var lastBagPersistMillis = 0L
 
     private val _status = MutableStateFlow(NewsStatus())
     val status: StateFlow<NewsStatus> = _status
@@ -78,14 +92,14 @@ class NewsRepository(private val context: Context) {
 
     /**
      * Draw the next headline without replacement, considering only headlines
-     * whose source name is in [allowedSources] - the cache deliberately holds
-     * *every* feed's headlines so a source can be toggled on while offline,
-     * but playback must honor the user's current selection. Returns null when
-     * nothing eligible is cached. Safe to call every round from the practice
-     * loop - it never blocks on I/O.
+     * whose [Headline.sourceId] is in [allowedSourceIds] - the cache
+     * deliberately holds *every* feed's headlines so a source can be toggled
+     * on while offline, but playback must honor the user's current selection.
+     * Returns null when nothing eligible is cached. Safe to call every round
+     * from the practice loop - it never blocks on I/O.
      */
-    fun nextHeadline(allowedSources: Set<String>): Headline? = synchronized(lock) {
-        val eligible = pool.filter { it.sourceName in allowedSources }
+    fun nextHeadline(allowedSourceIds: Set<String>): Headline? = synchronized(lock) {
+        val eligible = pool.filter { it.sourceId in allowedSourceIds }
         if (eligible.isEmpty()) return null
         var candidates = eligible.filter { it.id !in playedIds }
         if (candidates.isEmpty()) {
@@ -102,22 +116,39 @@ class NewsRepository(private val context: Context) {
         val pick = candidates.random(random)
         playedIds.add(pick.id)
         lastId = pick.id
-        scope.launch { persist() }
+        // Persist bag progress at most every BAG_PERSIST_INTERVAL_MS, not on
+        // every draw - see the constant for why.
+        val now = System.currentTimeMillis()
+        if (now - lastBagPersistMillis >= BAG_PERSIST_INTERVAL_MS) {
+            lastBagPersistMillis = now
+            scope.launch { persist() }
+        }
         pick
     }
 
     /** Kick a background refresh of the given feeds. Non-blocking. */
-    fun refresh(feeds: List<NewsSource>) {
-        scope.launch { doRefresh(feeds) }
+    fun refresh(feeds: List<NewsSource>, force: Boolean = false) {
+        scope.launch { doRefresh(feeds, force) }
     }
 
     /** Refresh and suspend until done. Used by the daily background worker. */
-    suspend fun refreshAndAwait(feeds: List<NewsSource>) = doRefresh(feeds)
+    suspend fun refreshAndAwait(feeds: List<NewsSource>, force: Boolean = false) =
+        doRefresh(feeds, force)
 
-    private suspend fun doRefresh(feeds: List<NewsSource>) {
+    private suspend fun doRefresh(feeds: List<NewsSource>, force: Boolean) {
         if (feeds.isEmpty()) {
             setStatus(message = "No sources selected.")
             return
+        }
+        // Rate limit: automatic triggers (panel shown, app launch) re-use a
+        // recent cache instead of re-downloading every feed. The explicit
+        // Refresh button and add-feed pass force=true.
+        if (!force) {
+            val recentEnough = synchronized(lock) {
+                pool.isNotEmpty() && updatedAtMillis
+                    ?.let { System.currentTimeMillis() - it < MIN_REFRESH_INTERVAL_MS } == true
+            }
+            if (recentEnough) return
         }
         if (!hasNetwork()) {
             setStatus(
@@ -144,7 +175,7 @@ class NewsRepository(private val context: Context) {
             )
             return
         }
-        merge(results, knownNames = feeds.mapTo(HashSet()) { it.name })
+        merge(results, knownIds = feeds.mapTo(HashSet()) { it.id })
         persist()
         val failed = results.filter { it.second.isEmpty() }.map { it.first.name }
         setStatus(
@@ -164,13 +195,13 @@ class NewsRepository(private val context: Context) {
      */
     private fun merge(
         results: List<Pair<NewsSource, List<Headline>>>,
-        knownNames: Set<String>,
+        knownIds: Set<String>,
     ) = synchronized(lock) {
-        val refreshedNames = results
+        val refreshedIds = results
             .filter { it.second.isNotEmpty() }
-            .mapTo(HashSet()) { it.first.name }
+            .mapTo(HashSet()) { it.first.id }
         val fresh = results.flatMap { it.second }
-        val kept = pool.filter { it.sourceName in knownNames && it.sourceName !in refreshedNames }
+        val kept = pool.filter { it.sourceId in knownIds && it.sourceId !in refreshedIds }
         val seen = HashSet<String>()
         val merged = ArrayList<Headline>(fresh.size + kept.size)
         for (h in fresh + kept) {
@@ -199,14 +230,14 @@ class NewsRepository(private val context: Context) {
                 Log.w(TAG, "feed ${feed.name} HTTP ${conn.responseCode}")
                 return emptyList()
             }
-            return conn.inputStream.use { parseFeed(it, feed.name) }
+            return conn.inputStream.use { parseFeed(it, feed) }
         } finally {
             conn.disconnect()
         }
     }
 
     /** Parse RSS 2.0 (<item>) or Atom (<entry>) into headlines. */
-    private fun parseFeed(input: java.io.InputStream, sourceName: String): List<Headline> {
+    private fun parseFeed(input: java.io.InputStream, feed: NewsSource): List<Headline> {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
         parser.setInput(input, null)
@@ -238,8 +269,15 @@ class NewsRepository(private val context: Context) {
                         inEntry = false
                         val t = cleanTitle(title)
                         if (t.isNotBlank()) {
-                            val idBase = guid.ifBlank { link.ifBlank { "$sourceName:$t" } }
-                            out.add(Headline(id = idBase, title = t, sourceName = sourceName))
+                            val idBase = guid.ifBlank { link.ifBlank { "${feed.id}:$t" } }
+                            out.add(
+                                Headline(
+                                    id = idBase,
+                                    title = t,
+                                    sourceId = feed.id,
+                                    sourceName = feed.name,
+                                )
+                            )
                         }
                     }
                 }
@@ -311,8 +349,18 @@ class NewsRepository(private val context: Context) {
             val loaded = (0 until arr.length()).mapNotNull { i ->
                 val ho = arr.optJSONObject(i) ?: return@mapNotNull null
                 val id = ho.optString("id"); val title = ho.optString("title")
-                if (id.isBlank() || title.isBlank()) null
-                else Headline(id, title, ho.optString("source"))
+                if (id.isBlank() || title.isBlank()) return@mapNotNull null
+                val name = ho.optString("source")
+                // Migration: caches written before headlines carried the
+                // stable source id only stored the display name. Built-in
+                // names map back to their ids; a legacy custom entry's URL
+                // can't be reconstructed from its host label, so it gets an
+                // empty id (never eligible) and is replaced by the next
+                // successful refresh.
+                val sourceId = ho.optString("sourceId").ifBlank {
+                    NewsSources.BUILT_IN.firstOrNull { it.name == name }?.id ?: ""
+                }
+                Headline(id = id, title = title, sourceId = sourceId, sourceName = name)
             }
             val played = o.optJSONArray("playedIds") ?: JSONArray()
             synchronized(lock) {
@@ -331,7 +379,13 @@ class NewsRepository(private val context: Context) {
             val o = JSONObject()
             val arr = JSONArray()
             for (h in pool) {
-                arr.put(JSONObject().put("id", h.id).put("title", h.title).put("source", h.sourceName))
+                arr.put(
+                    JSONObject()
+                        .put("id", h.id)
+                        .put("title", h.title)
+                        .put("sourceId", h.sourceId)
+                        .put("source", h.sourceName)
+                )
             }
             o.put("headlines", arr)
             o.put("playedIds", JSONArray(playedIds.toList()))

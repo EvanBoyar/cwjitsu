@@ -6,7 +6,6 @@ import com.cwjitsu.app.audio.Schedule
 import com.cwjitsu.app.audio.ScheduleBuilder
 import com.cwjitsu.app.audio.ToneEvent
 import com.cwjitsu.app.practice.ContentItem
-import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.PracticeConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,7 +18,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -51,7 +49,7 @@ class SessionOrchestrator(
         private const val HISTORY_KEEP = 50
     }
 
-    enum class RunnerState { IDLE, RUNNING, FINISHED, STOPPED }
+    enum class RunnerState { IDLE, RUNNING, STOPPED }
 
     /**
      * Rolling "now playing" window: the item currently being sent
@@ -154,7 +152,7 @@ class SessionOrchestrator(
                     position++
                 }
             }
-                _state.value = RunnerState.FINISHED
+                _state.value = RunnerState.STOPPED
             } catch (e: CancellationException) {
                 _state.value = RunnerState.STOPPED
                 Log.d(TAG, "start CANCELLED")
@@ -238,13 +236,12 @@ class SessionOrchestrator(
 
     /**
      * Suspend while the session is paused. Every audio-producing step in
-     * [playBatch] passes through here first so nothing sounds - and the
+     * [playItem] passes through here first so nothing sounds - and the
      * rolling now-playing window doesn't advance - while paused.
+     * Event-driven on the paused StateFlow (no polling wakeups).
      */
     private suspend fun awaitResume() {
-        while (_paused.value && coroutineContext.isActive) {
-            delay(50)
-        }
+        _paused.first { !it }
     }
 
     /**
@@ -262,32 +259,31 @@ class SessionOrchestrator(
         val builder = ScheduleBuilder(engine.sampleRate)
         val reps = config.repetitions.coerceAtLeast(1)
         Log.d(TAG, "playItem ENTER text='${item.text}' spoken='${item.spokenAnswer}' reps=$reps answers=${config.answerEnabled} courtesy=${config.courtesyToneEnabled}")
-        val morse = item.morseOverride
-            ?: item.text.uppercase()
-                .mapNotNull(Morse::codeFor)
-                .joinToString("")
-        Log.d(TAG, "playItem morse='${morse.take(80)}' isBlank=${morse.isBlank()}")
-        if (morse.isBlank()) return
+
+        // Single-shot items (e.g. a news headline) are sent once; hearing
+        // a long headline repeated N times would be tedious.
+        val effectiveReps = if (item.singleShot) 1 else reps
+        // Build the schedule up front: the builder is the single source of
+        // truth for what is sendable, so "nothing to play" is simply an
+        // empty event list (previously this was re-derived here with a
+        // second copy of the Morse-encoding logic).
+        val schedule = builder.build(List(effectiveReps) { item }, config)
+        if (schedule.events.isEmpty()) return
 
         // Park here while paused so we don't advance to the next item
         // (or its now-playing label) until the user resumes.
         awaitResume()
 
         // Advance the rolling now-playing window. Done here, after the
-        // blank-morse return, so unplayable items never appear.
+        // empty-schedule return, so unplayable items never appear.
         _nowPlaying.value = NowPlaying(
             previous = previousItem,
             current = item,
         )
 
-        // Single-shot items (e.g. a news headline) are sent once; hearing
-        // a long headline repeated N times would be tedious.
-        val effectiveReps = if (item.singleShot) 1 else reps
-        val batchForRep = List(effectiveReps) { item }
-        val schedule = builder.build(batchForRep, timesToRepeat = 1, config = config)
         engine.setSchedule(schedule, config)
         engine.play()
-        waitForAudioToFinish(schedule.totalSamples)
+        waitForAudioToFinish()
 
         // Skip/Previous pressed during the tone: engine.abort() unblocked the
         // wait above; bail out now (no answer, no courtesy).
@@ -328,10 +324,10 @@ class SessionOrchestrator(
             if (config.replayAfterAnswer && !item.singleShot) {
                 awaitResume()
                 delay(config.answerDelayMs)
-                val replay = builder.build(listOf(item), timesToRepeat = 1, config = config)
+                val replay = builder.build(listOf(item), config)
                 engine.setSchedule(replay, config)
                 engine.play()
-                waitForAudioToFinish(replay.totalSamples)
+                waitForAudioToFinish()
             }
         }
 
@@ -396,33 +392,17 @@ class SessionOrchestrator(
         val toneSamples = (50L * engine.sampleRate / 1000)
             .toInt()
             .coerceAtLeast(1)
-        // Pick the midpoint of the practice-tone amplitude range (now
-        // 0.35..1.0 per item) so the courtesy tone sits at roughly the same
-        // level as the rest of the session, not louder. Bypassing
-        // Master/volume-variation would otherwise make it pop out awkwardly.
-        val courtesyAmp = if (config.volumeVariationEnabled) 0.7f else 1.0f
-        // 30 ms silent warm-up. Android's native AudioFlinger mixer
-        // routinely swallows the first ~10-40 ms of a freshly created
-        // AudioTrack while its resampler and output stage spin up. For
-        // a 50 ms pip, losing a quarter of the symbol is enough to
-        // make the whole courtesy tone perceptually vanish on some
-        // devices - the alternating-batch symptom we observed before
-        // this fix. Prepending a short zero-amplitude event gives the
-        // mixer time to consume/flush that warm-up window so the next
-        // two events are heard at full amplitude.
-        val warmupSamples = (30L * engine.sampleRate / 1000)
-            .toInt()
-            .coerceAtLeast(1)
-        val warmupEvent = ToneEvent(
-            startSample = 0,
-            endSample = warmupSamples,
-            freqHz = 0,
-            amplitude = 0f,
-            label = "warmup",
-        )
+        // Pin the pip to the midpoint of the shared volume-variation range
+        // so it sits at roughly the same level as the rest of the session,
+        // not louder. Bypassing Master/volume-variation entirely would make
+        // it pop out awkwardly.
+        val courtesyAmp = if (config.volumeVariationEnabled) {
+            (ScheduleBuilder.VOLUME_VARIATION_MIN_AMP +
+                ScheduleBuilder.VOLUME_VARIATION_MAX_AMP) / 2f
+        } else 1.0f
         val firstEvent = ToneEvent(
-            startSample = warmupSamples,
-            endSample = warmupSamples + toneSamples,
+            startSample = 0,
+            endSample = toneSamples,
             freqHz = 947,
             amplitude = courtesyAmp,
             label = "courtesy1",
@@ -433,38 +413,35 @@ class SessionOrchestrator(
         // overlapping; if they overlapped, it would just sum both
         // frequencies into a buzz instead of a clean two-tone pip.
         val secondEvent = ToneEvent(
-            startSample = warmupSamples + toneSamples,
-            endSample = warmupSamples + toneSamples * 2,
+            startSample = toneSamples,
+            endSample = toneSamples * 2,
             freqHz = 1187,
             amplitude = courtesyAmp,
             label = "courtesy2",
         )
         val courtesy = Schedule(
-            events = listOf(warmupEvent, firstEvent, secondEvent),
-            totalSamples = warmupSamples + toneSamples * 2,
+            events = listOf(firstEvent, secondEvent),
+            totalSamples = toneSamples * 2,
             sampleRate = engine.sampleRate,
         )
         engine.setSchedule(courtesy, config)
         engine.play()
         Log.d(TAG, "playCourtesyTone waitForAudio ENTER totalSamples=${courtesy.totalSamples}")
-        waitForAudioToFinish(courtesy.totalSamples)
+        waitForAudioToFinish()
         Log.d(TAG, "playCourtesyTone waitForAudio RETURN")
-        // Brief settling pause so the next batch's first element doesn't
-        // butt up against the courtesy tone's envelope tail.
-        delay(80)
     }
 
-    private suspend fun waitForAudioToFinish(totalSamples: Int) {
-        val budgetSamples = totalSamples + engine.sampleRate
-        // Poll on a short delay rather than a tight yield loop: one audio
-        // block is ~23 ms, so 10 ms granularity detects completion promptly
-        // without burning a core for the length of the item (which matters
-        // for long news headlines).
-        while (engine.state.value == CwAudioEngine.State.PLAYING ||
-            engine.state.value == CwAudioEngine.State.PAUSED
-        ) {
-            if (engine.elapsedSamples() >= budgetSamples) return
-            delay(10)
+    /**
+     * Suspend until the engine leaves PLAYING/PAUSED for the installed
+     * schedule. Event-driven on the engine's StateFlow rather than the old
+     * 10 ms poll, so a session no longer wakes the CPU 100x/second for the
+     * length of every item. No timeout: the engine guarantees it reaches
+     * STOPPED (schedule finished, abort(), stop(), or a dead-track write
+     * failure), and PAUSED is allowed to wait indefinitely by design.
+     */
+    private suspend fun waitForAudioToFinish() {
+        engine.state.first {
+            it != CwAudioEngine.State.PLAYING && it != CwAudioEngine.State.PAUSED
         }
     }
 

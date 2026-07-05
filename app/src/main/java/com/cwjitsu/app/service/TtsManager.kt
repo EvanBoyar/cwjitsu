@@ -127,14 +127,25 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    /** Schedule [block] for when the engine is ready, or run it now. */
+    /**
+     * Schedule [block] for when the engine is ready, or run it now.
+     * Synchronized on `this` - the same monitor the init callback holds
+     * while draining [pendingCallbacks] - so a block registered mid-drain
+     * can't slip into the list unobserved and be dropped (which would
+     * leave its awaiting orchestrator coroutine to the awaitTts timeout).
+     */
     fun whenReady(block: () -> Unit) {
-        if (ready) {
-            block()
-            return
+        val runNow = synchronized(this) {
+            when {
+                ready -> true
+                initFailed -> return
+                else -> {
+                    pendingCallbacks.add(block)
+                    false
+                }
+            }
         }
-        if (initFailed) return
-        synchronized(pendingCallbacks) { pendingCallbacks.add(block) }
+        if (runNow) block()
     }
 
     fun speak(text: String, utteranceId: String, onDone: (Boolean) -> Unit) {

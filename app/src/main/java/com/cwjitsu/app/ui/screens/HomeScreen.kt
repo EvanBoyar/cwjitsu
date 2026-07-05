@@ -57,7 +57,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -98,8 +97,8 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
-import com.cwjitsu.app.ui.theme.cwSwitchColors
 import com.cwjitsu.app.ui.components.PlaybackControls
+import com.cwjitsu.app.ui.components.ToggleRow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -215,14 +214,12 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
-    fun refreshNews() {
-        scope.launch {
-            val cfg = app.settings.mixedConfigFlow.first() ?: MixedConfig()
-            // Download every feed regardless of which are enabled - the
-            // source toggles only gate playback, so switching a source on
-            // later (possibly offline) already has its headlines cached.
-            app.news.refresh(NewsSources.all(cfg.customNewsFeeds))
-        }
+    // The shared refresh rules (enabled-check, all-feeds download, rate
+    // limit) live in CWJitsuApp.refreshNewsIfEnabled. force=true is for the
+    // explicit Refresh button and newly-added feeds; automatic triggers
+    // (panel shown) leave it false so they reuse a recent cache.
+    fun refreshNews(force: Boolean = false) {
+        scope.launch { app.refreshNewsIfEnabled(force) }
     }
 
     fun toggleNewsSource(id: String) {
@@ -251,7 +248,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         (NewsSource.CUSTOM_PREFIX + normalized),
                 )
             }
-            refreshNews()
+            refreshNews(force = true)
         }
     }
 
@@ -306,10 +303,11 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         val newsItem = if (ContentKind.NEWS in current.enabledKinds) {
             // Only the user's selected sources are eligible for playback,
             // even though the cache holds headlines from every feed.
-            val allowedSources = NewsSources
+            // Keyed by stable source id, not display name.
+            val allowedIds = NewsSources
                 .active(current.enabledNewsSources, current.customNewsFeeds)
-                .mapTo(mutableSetOf()) { it.name }
-            app.news.nextHeadline(allowedSources)?.let { h ->
+                .mapTo(mutableSetOf()) { it.id }
+            app.news.nextHeadline(allowedIds)?.let { h ->
                 ContentItem(
                     // The character filter trims what gets keyed; the spoken
                     // answer keeps the original headline wording.
@@ -520,36 +518,16 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Prosigns (AR, BT, SK...)",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Switch(
-                        checked = effectiveConfig.prosignsEnabled,
-                        onCheckedChange = { setProsignsEnabled(it) },
-                        colors = cwSwitchColors(),
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Q-codes (QTH, QSL...)",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Switch(
-                        checked = effectiveConfig.qcodesEnabled,
-                        onCheckedChange = { setQcodesEnabled(it) },
-                        colors = cwSwitchColors(),
-                    )
-                }
+                ToggleRow(
+                    label = "Prosigns (AR, BT, SK...)",
+                    checked = effectiveConfig.prosignsEnabled,
+                    onCheckedChange = { setProsignsEnabled(it) },
+                )
+                ToggleRow(
+                    label = "Q-codes (QTH, QSL...)",
+                    checked = effectiveConfig.qcodesEnabled,
+                    onCheckedChange = { setQcodesEnabled(it) },
+                )
 
                 // Prosign spoken-answer style, shown only while prosigns are on.
                 if (effectiveConfig.prosignsEnabled) {
@@ -563,7 +541,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                             selected = config.prosignSpokenMode == ProsignSpokenMode.LITERAL,
                             onClick = {
                                 scope.launch {
-                                    app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL))
+                                    app.settings.updateConfig { it.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL) }
                                 }
                             },
                             label = { Text("Literal (\"A S\")") },
@@ -572,7 +550,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                             selected = config.prosignSpokenMode == ProsignSpokenMode.MEANING,
                             onClick = {
                                 scope.launch {
-                                    app.settings.save(config.copy(prosignSpokenMode = ProsignSpokenMode.MEANING))
+                                    app.settings.updateConfig { it.copy(prosignSpokenMode = ProsignSpokenMode.MEANING) }
                                 }
                             },
                             label = { Text("Meaning (\"wait\")") },
@@ -594,7 +572,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     onRemoveFeed = { removeCustomFeed(it) },
                     onSetNoRepeat = { setNewsNoRepeat(it) },
                     onSetCharFilter = { setNewsCharFilter(it) },
-                    onRefresh = { refreshNews() },
+                    onRefresh = { force -> refreshNews(force) },
                 )
             }
 
@@ -669,50 +647,23 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 // exactly which side is occasionally present. Each side
                 // is independently rolled at 25% when its toggle is on -
                 // the listener hears mostly plain callsigns with the
-                // toggled side appearing occasionally. Replaces the
-                // previous combined toggle (and the /prefix + /suffix
-                // dropdowns before that).
-                //
-                // Inlined here (rather than reusing ToggleRow from
-                // ConfigPanel) so HomeScreen stays self-contained and does
-                // not have to know about / import a private composable
-                // from a sibling package.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Random /prefix (occasionally)",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Switch(
-                        checked = effectiveConfig.callsignRandomPrefix,
-                        onCheckedChange = { setCallsignRandomPrefix(it) },
-                        colors = cwSwitchColors(),
-                    )
-                }
+                // toggled side appearing occasionally.
+                ToggleRow(
+                    label = "Random /prefix (occasionally)",
+                    checked = effectiveConfig.callsignRandomPrefix,
+                    onCheckedChange = { setCallsignRandomPrefix(it) },
+                )
                 Text(
                     "Adds a host-country /prefix (such as W1/, VE3/, JA/) to a random quarter of generated callsigns. Off = no prefix is added.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = 4.dp),
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Random /suffix (occasionally)",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Switch(
-                        checked = effectiveConfig.callsignRandomSuffix,
-                        onCheckedChange = { setCallsignRandomSuffix(it) },
-                        colors = cwSwitchColors(),
-                    )
-                }
+                ToggleRow(
+                    label = "Random /suffix (occasionally)",
+                    checked = effectiveConfig.callsignRandomSuffix,
+                    onCheckedChange = { setCallsignRandomSuffix(it) },
+                )
                 Text(
                     "Adds a portable-status /suffix (such as /M, /P, /QRP) to a random quarter of generated callsigns. Off = no suffix is added.",
                     style = MaterialTheme.typography.bodyLarge,
@@ -1041,11 +992,13 @@ private fun NewsSettings(
     onRemoveFeed: (String) -> Unit,
     onSetNoRepeat: (Boolean) -> Unit,
     onSetCharFilter: (CharFilter) -> Unit,
-    onRefresh: () -> Unit,
+    onRefresh: (force: Boolean) -> Unit,
 ) {
     // Warm the cache when the panel first appears (e.g. just after the user
-    // enables News). Fails fast and harmlessly when offline.
-    LaunchedEffect(Unit) { onRefresh() }
+    // enables News). Not forced: the repository skips it when the cache is
+    // fresh, so screen-hopping doesn't re-download every feed. Fails fast
+    // and harmlessly when offline.
+    LaunchedEffect(Unit) { onRefresh(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -1059,7 +1012,7 @@ private fun NewsSettings(
                     strokeWidth = 2.dp,
                 )
             }
-            TextButton(onClick = onRefresh, enabled = !status.refreshing) { Text("Refresh") }
+            TextButton(onClick = { onRefresh(true) }, enabled = !status.refreshing) { Text("Refresh") }
         }
         Text(
             text = newsStatusText(status),
@@ -1069,21 +1022,11 @@ private fun NewsSettings(
 
         // Headlines are long, so by default each one is sent once regardless
         // of the global repeat count. This switch overrides that just for news.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Play each headline only once",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Switch(
-                checked = noRepeat,
-                onCheckedChange = onSetNoRepeat,
-                colors = cwSwitchColors(),
-            )
-        }
+        ToggleRow(
+            label = "Play each headline only once",
+            checked = noRepeat,
+            onCheckedChange = onSetNoRepeat,
+        )
         Text(
             "Ignore the global repeat count for news as headlines are long.",
             style = MaterialTheme.typography.bodyMedium,

@@ -42,8 +42,8 @@ class ProsignContentGenerator(
         return List(count) {
             val key = keys.random(random)
             val answer = when (spokenMode) {
-                ProsignSpokenMode.LITERAL -> Morse.prosignLiteralFor(key)
-                ProsignSpokenMode.MEANING -> Morse.prosignMeanings[key] ?: Morse.prosignLiteralFor(key)
+                ProsignSpokenMode.LITERAL -> Morse.literalFor(key)
+                ProsignSpokenMode.MEANING -> Morse.prosignMeanings[key] ?: Morse.literalFor(key)
             }
             ContentItem(
                 text = "<$key>",

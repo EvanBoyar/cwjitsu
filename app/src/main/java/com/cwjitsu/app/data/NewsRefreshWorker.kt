@@ -4,10 +4,6 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.cwjitsu.app.CWJitsuApp
-import com.cwjitsu.app.practice.ContentKind
-import com.cwjitsu.app.practice.MixedConfig
-import com.cwjitsu.app.practice.NewsSources
-import kotlinx.coroutines.flow.first
 
 /**
  * Daily background refresh of the news cache so the first launch of the day -
@@ -23,12 +19,9 @@ class NewsRefreshWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? CWJitsuApp ?: return Result.success()
-        val cfg = app.settings.mixedConfigFlow.first() ?: MixedConfig()
-        // Only spend the user's data if they actually practise news.
-        if (ContentKind.NEWS !in cfg.enabledKinds) return Result.success()
-        // Download every feed, not just the enabled ones, so toggling a
-        // source on later (possibly offline) already has content cached.
-        app.news.refreshAndAwait(NewsSources.all(cfg.customNewsFeeds))
+        // force=true: the daily refresh is the offline-first backstop and
+        // should never be skipped by the short-interval rate limit.
+        app.refreshNewsIfEnabled(force = true)
         return Result.success()
     }
 }

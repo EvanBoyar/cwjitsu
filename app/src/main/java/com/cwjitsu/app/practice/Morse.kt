@@ -3,7 +3,6 @@ package com.cwjitsu.app.practice
 /**
  * International Morse code mapping.
  * Prosigns are represented by adjacent letters with no gap (e.g. AR = A followed by R).
- * Slash characters in strings map to inter-word gaps.
  *
  * Dot is represented by '.', dash by '-'.
  */
@@ -43,7 +42,7 @@ object Morse {
         "AR" to ".-.-.",     // end of message
         "AS" to ".-...",     // wait
         "BT" to "-...-",     // break / new section
-        "CT" to "-.-.-.-",   // start of message (also KA)
+        "CT" to "-.-.-",     // start of message (also KA): C + T joined
         "DO" to "-..---",    // shift to alternate code
         "KN" to "-.--.",     // invitation to named station only
         "SK" to "...-.-",    // end of contact
@@ -122,27 +121,22 @@ object Morse {
             when {
                 upper in 'A'..'Z' -> nato[upper] ?: upper.toString()
                 upper in '0'..'9' -> nato[upper] ?: upper.toString()
-                // "stroke" is the conventional ham-radio pronunciation
-                // for the "/" character used in callsign prefixes and
-                // suffixes (e.g. "W1/" is spoken "W one stroke").
-                ch == '/' -> "stroke"
+                // "/" is passed through: the orchestrator replaces it with
+                // the conventional spoken "stroke" for EVERY answer just
+                // before TTS (it also works around platform engines that
+                // treat "/" as a sentence boundary), so mapping it here too
+                // would be a second source of truth for the same rule.
                 else -> ch.toString()
             }
         }.joinToString(" ")
 
     /**
-     * Render text for the [nato] = false path: each character is
-     * separated by a single space so the TTS engine pronounces them
-     * individually. For free text where the user wants words spoken as
-     * words, prefer passing the text through unchanged instead.
+     * Render text with each character separated by a single space so the
+     * TTS engine pronounces them individually, e.g. "AR" -> "A R". Used for
+     * the [nato] = false path and for literal prosign answers. For free text
+     * where the user wants words spoken as words, prefer passing the text
+     * through unchanged instead.
      */
     fun literalFor(text: String): String =
         text.map { it.toString() }.joinToString(" ")
-
-    /**
-     * Speak a prosign's letters literally, space-separated. E.g. "AR" -> "A R",
-     * "SOS" -> "S O S".
-     */
-    fun prosignLiteralFor(key: String): String =
-        key.toCharArray().joinToString(" ") { it.toString() }
 }

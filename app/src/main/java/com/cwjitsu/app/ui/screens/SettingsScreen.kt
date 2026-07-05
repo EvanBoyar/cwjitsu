@@ -77,14 +77,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                 FilterChip(
                     selected = config.natoSpokenAnswers,
                     onClick = {
-                        scope.launch { app.settings.save(config.copy(natoSpokenAnswers = true)) }
+                        scope.launch { app.settings.updateConfig { it.copy(natoSpokenAnswers = true) } }
                     },
                     label = { Text("NATO phonetics") },
                 )
                 FilterChip(
                     selected = !config.natoSpokenAnswers,
                     onClick = {
-                        scope.launch { app.settings.save(config.copy(natoSpokenAnswers = false)) }
+                        scope.launch { app.settings.updateConfig { it.copy(natoSpokenAnswers = false) } }
                     },
                     label = { Text("Letter's spoken name") },
                 )
@@ -125,10 +125,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             HorizontalDivider()
 
             // Global practice config (WPM, frequency, repetitions, etc.).
+            // Edits arrive as transforms and are applied atomically against
+            // the stored config, so a stale UI snapshot can never clobber
+            // other settings.
             ConfigPanel(
                 config = config,
-                onConfigChange = { updated ->
-                    scope.launch { app.settings.save(updated) }
+                onUpdate = { transform ->
+                    scope.launch { app.settings.updateConfig(transform) }
                 },
             )
 

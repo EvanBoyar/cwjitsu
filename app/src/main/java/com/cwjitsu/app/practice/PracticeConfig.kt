@@ -42,7 +42,6 @@ data class PracticeConfig(
     val answerEnabled: Boolean = true,
     val replayAfterAnswer: Boolean = false,
     val courtesyToneEnabled: Boolean = true,
-    val courtesyToneMs: Long = 400,
     val frequencyHz: Int = 600,
     val frequencyMinHz: Int = 500,
     val frequencyMaxHz: Int = 800,

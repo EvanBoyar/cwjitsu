@@ -12,8 +12,8 @@ enum class ContentKind {
     WORDS,
     TEXT,
     CALLSIGNS,
-    // Placeholder for a future feature: spoken news headlines from
-    // user-selected sources. Currently emits nothing.
+    // Live news headlines drawn from the offline-first NewsRepository cache,
+    // filtered to the user's selected sources.
     NEWS,
 }
 

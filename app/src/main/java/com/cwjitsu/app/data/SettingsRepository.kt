@@ -1,8 +1,12 @@
 package com.cwjitsu.app.data
 
 import android.content.Context
+import android.util.Log
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -19,6 +23,7 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.practice.SloppyMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,6 +36,10 @@ private val Context.dataStore by preferencesDataStore(name = "cwjitsu_prefs")
  */
 class SettingsRepository(private val context: Context) {
 
+    companion object {
+        private const val TAG = "CWJitsu/Settings"
+    }
+
     object Keys {
         val CHARACTER_WPM = intPreferencesKey("character_wpm")
         val FARNSWORTH_WPM = intPreferencesKey("farnsworth_wpm")
@@ -39,7 +48,6 @@ class SettingsRepository(private val context: Context) {
         val ANSWER_DELAY_MS = longPreferencesKey("answer_delay_ms")
         val ANSWER_ENABLED = booleanPreferencesKey("answer_enabled")
         val COURTESY_TONE_ENABLED = booleanPreferencesKey("courtesy_tone_enabled")
-        val COURTESY_TONE_MS = longPreferencesKey("courtesy_tone_ms")
         val FREQUENCY_HZ = intPreferencesKey("frequency_hz")
         val FREQUENCY_MIN_HZ = intPreferencesKey("frequency_min_hz")
         val FREQUENCY_MAX_HZ = intPreferencesKey("frequency_max_hz")
@@ -60,33 +68,41 @@ class SettingsRepository(private val context: Context) {
     }
 
     /** Whether to check GitHub for a newer release on launch. Default on. */
-    val updateCheckEnabledFlow: Flow<Boolean> = context.dataStore.data.map { p ->
-        p[Keys.UPDATE_CHECK_ENABLED] ?: true
-    }
+    val updateCheckEnabledFlow: Flow<Boolean> = context.dataStore.data
+        .catch { e -> Log.w(TAG, "updateCheckEnabledFlow read failed", e); emit(emptyPreferences()) }
+        .map { p -> p[Keys.UPDATE_CHECK_ENABLED] ?: true }
 
     suspend fun setUpdateCheckEnabled(enabled: Boolean) {
         context.dataStore.edit { p -> p[Keys.UPDATE_CHECK_ENABLED] = enabled }
     }
 
-    val configFlow: Flow<PracticeConfig> = context.dataStore.data.map { p ->
-        PracticeConfig(
-            characterWpm = p[Keys.CHARACTER_WPM] ?: 18,
+    /**
+     * Rebuild a [PracticeConfig] from raw preferences, coercing every value
+     * into its valid range. DataStore contents are external input (an older
+     * build or interrupted write can leave out-of-range values), and
+     * [PracticeConfig]'s init-block invariants would otherwise throw inside
+     * the flow and crash every collector.
+     */
+    private fun configFrom(p: Preferences): PracticeConfig {
+        val minHz = (p[Keys.FREQUENCY_MIN_HZ] ?: 500).coerceIn(300, 1500)
+        val maxHz = (p[Keys.FREQUENCY_MAX_HZ] ?: 800).coerceIn(300, 1500)
+        return PracticeConfig(
+            characterWpm = (p[Keys.CHARACTER_WPM] ?: 18).coerceIn(5, 60),
             farnsworthWpm = p[Keys.FARNSWORTH_WPM]?.takeIf { it > 0 },
-            repetitions = p[Keys.REPETITIONS] ?: 3,
-            postSendPauseMs = p[Keys.POST_SEND_PAUSE_MS] ?: 1500L,
-            answerDelayMs = p[Keys.ANSWER_DELAY_MS] ?: 2000L,
+            repetitions = (p[Keys.REPETITIONS] ?: 3).coerceIn(1, 20),
+            postSendPauseMs = (p[Keys.POST_SEND_PAUSE_MS] ?: 1500L).coerceAtLeast(0L),
+            answerDelayMs = (p[Keys.ANSWER_DELAY_MS] ?: 2000L).coerceAtLeast(0L),
             answerEnabled = p[Keys.ANSWER_ENABLED] ?: true,
             courtesyToneEnabled = p[Keys.COURTESY_TONE_ENABLED] ?: true,
-            courtesyToneMs = p[Keys.COURTESY_TONE_MS] ?: 400L,
-            frequencyHz = p[Keys.FREQUENCY_HZ] ?: 600,
-            frequencyMinHz = p[Keys.FREQUENCY_MIN_HZ] ?: 500,
-            frequencyMaxHz = p[Keys.FREQUENCY_MAX_HZ] ?: 800,
+            frequencyHz = (p[Keys.FREQUENCY_HZ] ?: 600).coerceIn(300, 1500),
+            frequencyMinHz = minOf(minHz, maxHz),
+            frequencyMaxHz = maxOf(minHz, maxHz),
             randomizeFrequency = p[Keys.RANDOMIZE_FREQUENCY] ?: false,
             replayAfterAnswer = p[Keys.REPLAY_AFTER_ANSWER] ?: false,
             volumeVariationEnabled = p[Keys.VOLUME_VARIATION_ENABLED] ?: true,
-            masterVolume = p[Keys.MASTER_VOLUME] ?: 0.85f,
+            masterVolume = (p[Keys.MASTER_VOLUME] ?: 0.85f).coerceIn(0f, 1f),
             noiseType = NoiseType.entries.firstOrNull { it.name == p[Keys.NOISE_TYPE] } ?: NoiseType.NONE,
-            noiseVolume = p[Keys.NOISE_VOLUME] ?: 0.0f,
+            noiseVolume = (p[Keys.NOISE_VOLUME] ?: 0.0f).coerceIn(0f, 1f),
             sloppyMode = SloppyMode.entries
                 .firstOrNull { it.name == p[Keys.SLOPPY_MODE] }
                 ?: SloppyMode.OFF,
@@ -97,39 +113,59 @@ class SettingsRepository(private val context: Context) {
         )
     }
 
-    suspend fun save(config: PracticeConfig) {
-        context.dataStore.edit { p ->
-            p[Keys.CHARACTER_WPM] = config.characterWpm
-            p[Keys.FARNSWORTH_WPM] = config.farnsworthWpm ?: 0
-            p[Keys.REPETITIONS] = config.repetitions
-            p[Keys.POST_SEND_PAUSE_MS] = config.postSendPauseMs
-            p[Keys.ANSWER_DELAY_MS] = config.answerDelayMs
-            p[Keys.ANSWER_ENABLED] = config.answerEnabled
-            p[Keys.COURTESY_TONE_ENABLED] = config.courtesyToneEnabled
-            p[Keys.COURTESY_TONE_MS] = config.courtesyToneMs
-            p[Keys.FREQUENCY_HZ] = config.frequencyHz
-            p[Keys.FREQUENCY_MIN_HZ] = config.frequencyMinHz
-            p[Keys.FREQUENCY_MAX_HZ] = config.frequencyMaxHz
-            p[Keys.RANDOMIZE_FREQUENCY] = config.randomizeFrequency
-            p[Keys.REPLAY_AFTER_ANSWER] = config.replayAfterAnswer
-            p[Keys.VOLUME_VARIATION_ENABLED] = config.volumeVariationEnabled
-            p[Keys.MASTER_VOLUME] = config.masterVolume
-            p[Keys.NOISE_TYPE] = config.noiseType.name
-            p[Keys.NOISE_VOLUME] = config.noiseVolume
-            p[Keys.SLOPPY_MODE] = config.sloppyMode.name
-            p[Keys.PROSIGN_SPOKEN_MODE] = config.prosignSpokenMode.name
-            p[Keys.NATO_SPOKEN_ANSWERS] = config.natoSpokenAnswers
+    private fun writeConfig(p: MutablePreferences, config: PracticeConfig) {
+        p[Keys.CHARACTER_WPM] = config.characterWpm
+        p[Keys.FARNSWORTH_WPM] = config.farnsworthWpm ?: 0
+        p[Keys.REPETITIONS] = config.repetitions
+        p[Keys.POST_SEND_PAUSE_MS] = config.postSendPauseMs
+        p[Keys.ANSWER_DELAY_MS] = config.answerDelayMs
+        p[Keys.ANSWER_ENABLED] = config.answerEnabled
+        p[Keys.COURTESY_TONE_ENABLED] = config.courtesyToneEnabled
+        p[Keys.FREQUENCY_HZ] = config.frequencyHz
+        p[Keys.FREQUENCY_MIN_HZ] = config.frequencyMinHz
+        p[Keys.FREQUENCY_MAX_HZ] = config.frequencyMaxHz
+        p[Keys.RANDOMIZE_FREQUENCY] = config.randomizeFrequency
+        p[Keys.REPLAY_AFTER_ANSWER] = config.replayAfterAnswer
+        p[Keys.VOLUME_VARIATION_ENABLED] = config.volumeVariationEnabled
+        p[Keys.MASTER_VOLUME] = config.masterVolume
+        p[Keys.NOISE_TYPE] = config.noiseType.name
+        p[Keys.NOISE_VOLUME] = config.noiseVolume
+        p[Keys.SLOPPY_MODE] = config.sloppyMode.name
+        p[Keys.PROSIGN_SPOKEN_MODE] = config.prosignSpokenMode.name
+        p[Keys.NATO_SPOKEN_ANSWERS] = config.natoSpokenAnswers
+    }
+
+    val configFlow: Flow<PracticeConfig> = context.dataStore.data
+        .catch { e ->
+            // A failed DataStore read must never crash collectors (the UI
+            // and the running session both collect this); log and fall back
+            // to defaults instead.
+            Log.w(TAG, "configFlow read failed", e)
+            emit(emptyPreferences())
         }
+        .map { p -> configFrom(p) }
+
+    /**
+     * Atomic read-modify-write of the saved [PracticeConfig], mirroring
+     * [updateMixedConfig]. Every UI edit goes through here: a full-object
+     * save built from a collected UI snapshot could clobber a concurrent
+     * edit from another screen - or, before DataStore's first emission,
+     * write constructor defaults over every saved setting.
+     */
+    suspend fun updateConfig(transform: (PracticeConfig) -> PracticeConfig) {
+        context.dataStore.edit { p -> writeConfig(p, transform(configFrom(p))) }
     }
 
     /**
      * The user's mixed-practice config. Emits `null` when nothing is saved
      * yet, so callers can fall back to a sensible default.
      */
-    val mixedConfigFlow: Flow<MixedConfig?> = context.dataStore.data.map { p ->
-        val json = p[Keys.MIXED_CONFIG_JSON] ?: return@map null
-        runCatching { parseMixedConfig(json) }.getOrNull()
-    }
+    val mixedConfigFlow: Flow<MixedConfig?> = context.dataStore.data
+        .catch { e -> Log.w(TAG, "mixedConfigFlow read failed", e); emit(emptyPreferences()) }
+        .map { p ->
+            val json = p[Keys.MIXED_CONFIG_JSON] ?: return@map null
+            runCatching { parseMixedConfig(json) }.getOrNull()
+        }
 
     suspend fun saveMixedConfig(config: MixedConfig) {
         context.dataStore.edit { p ->

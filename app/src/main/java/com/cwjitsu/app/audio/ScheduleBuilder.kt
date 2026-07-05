@@ -26,7 +26,7 @@ data class ToneEvent(
  *   - Tone duration: dot = dash / 3 = 1 dot-time per character WPM.
  *   - Intra-element gap (between elements of the same letter or prosign): 1 dot.
  *   - Inter-character gap (between letters inside a multi-letter item): 3 dot + 3·ext.
- *   - Inter-item gap (between items, between repetitions): 7 dot + 7·ext (word length).
+ *   - Inter-item gap (between items in one schedule): 7 dot + 7·ext (word length).
  *
  * When [PracticeConfig.randomizeFrequency] is on, a single random frequency is
  * chosen for the whole [ContentItem] (e.g. one tone per callsign, one per letter
@@ -37,9 +37,19 @@ class ScheduleBuilder(
     private val random: Random = Random.Default,
 ) {
 
+    companion object {
+        /**
+         * Per-item volume-variation amplitude range (see [pickAmp]). Shared
+         * with the courtesy tone so its level stays anchored to the middle
+         * of the practice-tone range instead of drifting when this range
+         * is retuned.
+         */
+        const val VOLUME_VARIATION_MIN_AMP = 0.35f
+        const val VOLUME_VARIATION_MAX_AMP = 1.0f
+    }
+
     fun build(
         items: List<ContentItem>,
-        timesToRepeat: Int,
         config: PracticeConfig,
     ): Schedule {
         if (items.isEmpty()) return Schedule(emptyList(), 0, sampleRate)
@@ -50,7 +60,6 @@ class ScheduleBuilder(
         val intraGapSamples = msToSamples(timings.intraGapMs)
         val charGapSamples = msToSamples(timings.interCharGapMs)
         val wordGapSamples = msToSamples(timings.interWordGapMs)
-        val postPauseSamples = msToSamples(config.postSendPauseMs)
 
         var cursor = 0
         val events = mutableListOf<ToneEvent>()
@@ -139,17 +148,9 @@ class ScheduleBuilder(
             }
         }
 
-        val repeatCount = max(1, timesToRepeat)
-
-        for (rep in 0 until repeatCount) {
-            items.forEachIndexed { idx, item ->
-                emitItem(item)
-                if (idx < items.size - 1) {
-                    cursor += wordGapSamples
-                } else if (rep < repeatCount - 1) {
-                    cursor += wordGapSamples + postPauseSamples
-                }
-            }
+        items.forEachIndexed { idx, item ->
+            emitItem(item)
+            if (idx < items.size - 1) cursor += wordGapSamples
         }
 
         return Schedule(
@@ -174,7 +175,8 @@ class ScheduleBuilder(
      */
     private fun pickAmp(config: PracticeConfig): Float =
         if (!config.volumeVariationEnabled) 1.0f
-        else 0.35f + random.nextFloat() * 0.65f
+        else VOLUME_VARIATION_MIN_AMP +
+            random.nextFloat() * (VOLUME_VARIATION_MAX_AMP - VOLUME_VARIATION_MIN_AMP)
 
     /**
      * Apply sloppy-mode jitter to an individual element duration (a dot or

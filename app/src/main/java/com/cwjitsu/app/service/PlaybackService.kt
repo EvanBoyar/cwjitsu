@@ -68,9 +68,15 @@ class PlaybackService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_SONIFICATION)
             .build()
         val ep = ExoPlayer.Builder(this).build().apply {
-            // The carrier is silent and must not grab audio focus - the
-            // real practice audio (engine + TTS) manages its own output.
-            setAudioAttributes(audioAttrs, /* handleAudioFocus = */ false)
+            // The carrier doubles as the app's audio-focus owner: the CW
+            // engine writes raw PCM and never requests focus itself, so
+            // without this the practice audio would just mix over whatever
+            // else is playing (music, navigation). ExoPlayer requests focus
+            // when the carrier starts and pauses it on focus loss, which the
+            // Player.Listener below forwards to the orchestrator - so
+            // another app taking over audio pauses the practice session
+            // instead of talking over it.
+            setAudioAttributes(audioAttrs, /* handleAudioFocus = */ true)
             volume = 0f
             repeatMode = Player.REPEAT_MODE_ONE
             playWhenReady = false
