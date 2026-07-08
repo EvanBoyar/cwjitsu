@@ -24,6 +24,8 @@ object ContentMixer {
         textCharFilter: CharFilter = CharFilter.EVERYTHING,
         callsignRandomPrefix: Boolean = false,
         callsignRandomSuffix: Boolean = false,
+        callsignMinLength: Int = MixedConfig.CALLSIGN_LENGTH_RANGE.first,
+        callsignMaxLength: Int = MixedConfig.CALLSIGN_LENGTH_RANGE.last,
         characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
         prosignsEnabled: Boolean = true,
         qcodesEnabled: Boolean = true,
@@ -85,6 +87,8 @@ object ContentMixer {
                                 country = country,
                                 randomPrefix = callsignRandomPrefix,
                                 randomSuffix = callsignRandomSuffix,
+                                minLength = callsignMinLength,
+                                maxLength = callsignMaxLength,
                             ).map { callsign ->
                                 ContentItem(
                                     text = callsign,

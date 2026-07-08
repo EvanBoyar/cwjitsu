@@ -318,7 +318,7 @@ class SessionOrchestrator(
             val rawAnswer = item.spokenAnswer ?: item.text
             val answer = rawAnswer.replace("/", " stroke ")
             Log.d(TAG, "playItem awaitTts ENTER answer='${answer.take(80)}' id='${item.text}'")
-            val ok = awaitTts(answer, item.text)
+            val ok = awaitTts(answer, item.text, config.ttsVolume)
             Log.d(TAG, "playItem awaitTts RETURN ok=$ok")
 
             // Optional one-shot replay of the same code, never
@@ -447,7 +447,7 @@ class SessionOrchestrator(
         }
     }
 
-    private suspend fun awaitTts(text: String, utteranceId: String): Boolean =
+    private suspend fun awaitTts(text: String, utteranceId: String, volume: Float): Boolean =
         // Bound every per-item TTS wait so a flaky platform engine that
         // never fires `onDone` for some pathological utterance cannot
         // wedge the orchestrator before the post-batch courtesy tone
@@ -457,7 +457,7 @@ class SessionOrchestrator(
         // session.
         withTimeoutOrNull(10_000L) {
             suspendCancellableCoroutine { cont ->
-                tts.speak(text, utteranceId) { ok ->
+                tts.speak(text, utteranceId, volume) { ok ->
                     if (cont.isActive) cont.resume(ok)
                 }
             }

@@ -6,9 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,7 +19,9 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.SloppyMode
 
 /**
- * Reusable Compose panel that exposes the whole [PracticeConfig] to the user.
+ * Reusable Compose panel that exposes the whole [PracticeConfig] to the user,
+ * grouped into titled sections (Speed / Flow / Spoken answers / Keying /
+ * Tone / Background noise) separated by dividers.
  *
  * Edits are emitted as TRANSFORMS ([onUpdate] receives a `(config) -> config`
  * lambda) rather than full replacement objects, so the caller can apply them
@@ -36,7 +37,9 @@ fun ConfigPanel(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Practice Settings", style = MaterialTheme.typography.titleLarge)
+
+        // ---------- Speed ----------
+        Text("Speed", style = MaterialTheme.typography.titleLarge)
 
         LabeledSlider(
             label = "Character speed (WPM)",
@@ -86,6 +89,10 @@ fun ConfigPanel(
             enabled = farnsOn,
         )
 
+        // ---------- Flow ----------
+        HorizontalDivider()
+        Text("Flow", style = MaterialTheme.typography.titleLarge)
+
         // Shown as a repeat count: 0 means "sent once, not repeated". The
         // stored `repetitions` is the play count (always >= 1), so the slider
         // maps display = plays - 1 and stores value + 1. This keeps existing
@@ -111,6 +118,50 @@ fun ConfigPanel(
             onValueChange = { v -> onUpdate { it.copy(postSendPauseMs = v.toLong()) } },
         )
 
+        ToggleRow(
+            label = "Courtesy tone after sequence",
+            checked = config.courtesyToneEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(courtesyToneEnabled = on) } },
+        )
+
+        // ---------- Spoken answers ----------
+        HorizontalDivider()
+        Text("Spoken answers", style = MaterialTheme.typography.titleLarge)
+
+        ToggleRow(
+            label = "Speak the answer",
+            checked = config.answerEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(answerEnabled = on) } },
+        )
+
+        // Everything below follows the master toggle and greys out with it:
+        // how the answer is pronounced, how loud, how soon, and whether the
+        // code replays afterwards.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = config.natoSpokenAnswers,
+                onClick = { onUpdate { it.copy(natoSpokenAnswers = true) } },
+                label = { Text("NATO phonetics") },
+                enabled = config.answerEnabled,
+            )
+            FilterChip(
+                selected = !config.natoSpokenAnswers,
+                onClick = { onUpdate { it.copy(natoSpokenAnswers = false) } },
+                label = { Text("Letter's spoken name") },
+                enabled = config.answerEnabled,
+            )
+        }
+
+        LabeledSlider(
+            label = "Spoken answer volume",
+            value = config.ttsVolume,
+            valueRange = 0f..1f,
+            steps = 99,
+            valueLabel = "%.0f%%".format(config.ttsVolume * 100),
+            onValueChange = { v -> onUpdate { it.copy(ttsVolume = v) } },
+            enabled = config.answerEnabled,
+        )
+
         LabeledSlider(
             label = "Answer delay (ms)",
             value = config.answerDelayMs.toFloat(),
@@ -118,12 +169,7 @@ fun ConfigPanel(
             steps = 49,
             valueLabel = "${config.answerDelayMs}ms",
             onValueChange = { v -> onUpdate { it.copy(answerDelayMs = v.toLong()) } },
-        )
-
-        ToggleRow(
-            label = "Speak the answer",
-            checked = config.answerEnabled,
-            onCheckedChange = { on -> onUpdate { it.copy(answerEnabled = on) } },
+            enabled = config.answerEnabled,
         )
 
         // One-shot replay of the code after the spoken answer. The
@@ -134,22 +180,21 @@ fun ConfigPanel(
             label = "Replay code after answer",
             checked = config.replayAfterAnswer,
             onCheckedChange = { on -> onUpdate { it.copy(replayAfterAnswer = on) } },
+            enabled = config.answerEnabled,
         )
 
-        ToggleRow(
-            label = "Courtesy tone after sequence",
-            checked = config.courtesyToneEnabled,
-            onCheckedChange = { on -> onUpdate { it.copy(courtesyToneEnabled = on) } },
-        )
+        // ---------- Keying ----------
+        HorizontalDivider()
+        Text("Keying character", style = MaterialTheme.typography.titleLarge)
 
-        Text(
-            "Keying character",
-            style = MaterialTheme.typography.titleLarge,
-        )
         SloppyModeRow(
             current = config.sloppyMode,
             onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
         )
+
+        // ---------- Tone ----------
+        HorizontalDivider()
+        Text("Tone", style = MaterialTheme.typography.titleLarge)
 
         LabeledSlider(
             label = "Tone frequency (Hz)",
@@ -208,7 +253,10 @@ fun ConfigPanel(
             onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
         )
 
+        // ---------- Background noise ----------
+        HorizontalDivider()
         Text("Background noise", style = MaterialTheme.typography.titleLarge)
+
         for (t in NoiseType.entries) {
             NoiseRow(
                 label = t.name,
@@ -263,18 +311,16 @@ private fun LabeledSlider(
                 color = labelColor,
             )
         }
-        Slider(
+        // Drag-only on purpose: the standard Slider moves on a bare track
+        // press, so scrolling the settings page used to change values.
+        DragOnlySlider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = onValueChange,
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
-            colors = SliderDefaults.colors(
-                thumbColor = thumb,
-                activeTrackColor = track,
-                disabledThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                disabledActiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-            ),
+            thumbColor = thumb,
+            trackColor = track,
         )
     }
 }
@@ -313,10 +359,17 @@ private fun SloppyModeRow(
  * screen use the same row instead of re-inlining it.
  */
 @Composable
-fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
+    val labelColor = if (enabled) MaterialTheme.colorScheme.onSurface
+                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = cwSwitchColors())
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = labelColor)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = cwSwitchColors(), enabled = enabled)
     }
 }
 

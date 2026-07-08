@@ -97,8 +97,10 @@ import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.ProsignSpokenMode
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
+import com.cwjitsu.app.ui.components.DragOnlyRangeSlider
 import com.cwjitsu.app.ui.components.PlaybackControls
 import com.cwjitsu.app.ui.components.ToggleRow
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -294,6 +296,16 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    // Both bounds arrive together from the range slider, whose thumbs can't
+    // cross, so min <= max is guaranteed by construction.
+    fun setCallsignLengthRange(min: Int, max: Int) {
+        scope.launch {
+            app.settings.updateMixedConfig {
+                it.copy(callsignMinLength = min, callsignMaxLength = max)
+            }
+        }
+    }
+
     val regenerator: ContentRegenerator = { cfg ->
         val current = app.settings.mixedConfigFlow.first() ?: MixedConfig()
         val words = WordDictionary.get(app)
@@ -328,6 +340,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             textCharFilter = current.textCharFilter,
             callsignRandomPrefix = current.callsignRandomPrefix,
             callsignRandomSuffix = current.callsignRandomSuffix,
+            callsignMinLength = current.callsignMinLength,
+            callsignMaxLength = current.callsignMaxLength,
             characterPool = current.characterSet,
             prosignsEnabled = current.prosignsEnabled,
             qcodesEnabled = current.qcodesEnabled,
@@ -671,6 +685,22 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     modifier = Modifier.padding(top = 4.dp),
                 )
 
+                // Length bounds on the core callsign (prefix + digit +
+                // suffix; any '/' decoration doesn't count). One two-thumb
+                // slider keeps min <= max by construction.
+                CallsignLengthRangeSlider(
+                    min = effectiveConfig.callsignMinLength,
+                    max = effectiveConfig.callsignMaxLength,
+                    onChange = { min, max -> setCallsignLengthRange(min, max) },
+                )
+                Text(
+                    "Length of the callsign itself, counting the prefix, digit, " +
+                        "and suffix (a random /prefix or /suffix doesn't count). " +
+                        "Countries that can't reach the range get as close as they can.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+
                 if (showCountryDialog) {
                     CountryManagerDialog(
                         selectedCountries = effectiveConfig.callsignCountries,
@@ -723,6 +753,46 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             }
 
         }
+    }
+}
+
+/**
+ * Two-thumb slider picking the min/max core-callsign length across
+ * [MixedConfig.CALLSIGN_LENGTH_RANGE]. Discrete steps, one per length;
+ * the thumbs can't cross, so min <= max holds by construction.
+ */
+@Composable
+private fun CallsignLengthRangeSlider(
+    min: Int,
+    max: Int,
+    onChange: (Int, Int) -> Unit,
+) {
+    val bounds = MixedConfig.CALLSIGN_LENGTH_RANGE
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Callsign length",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (min == max) "$min" else "$min–$max",
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        // Drag-only on purpose: the standard RangeSlider moves on a bare
+        // track press, so scrolling the panel used to change the bounds.
+        DragOnlyRangeSlider(
+            value = min.toFloat()..max.toFloat(),
+            onValueChange = { range ->
+                onChange(
+                    range.start.roundToInt().coerceIn(bounds.first, bounds.last),
+                    range.endInclusive.roundToInt().coerceIn(bounds.first, bounds.last),
+                )
+            },
+            valueRange = bounds.first.toFloat()..bounds.last.toFloat(),
+            steps = bounds.last - bounds.first - 1,
+        )
     }
 }
 

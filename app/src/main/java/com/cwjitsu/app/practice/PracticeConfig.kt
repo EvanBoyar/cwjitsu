@@ -48,6 +48,11 @@ data class PracticeConfig(
     val randomizeFrequency: Boolean = false,
     val volumeVariationEnabled: Boolean = true,
     val masterVolume: Float = 0.85f,
+    /**
+     * Volume of the spoken (TTS) answer, independent of [masterVolume]
+     * which only scales the CW tone. 1.0 = the engine's full volume.
+     */
+    val ttsVolume: Float = 1.0f,
     val noiseType: NoiseType = NoiseType.NONE,
     val noiseVolume: Float = 0.0f,
     val sloppyMode: SloppyMode = SloppyMode.OFF,
@@ -68,6 +73,7 @@ data class PracticeConfig(
         require(frequencyMinHz <= frequencyMaxHz)
         require(noiseVolume in 0f..1f)
         require(masterVolume in 0f..1f)
+        require(ttsVolume in 0f..1f)
         require(repetitions in 1..20)
     }
 

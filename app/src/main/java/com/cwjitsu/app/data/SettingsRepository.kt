@@ -55,6 +55,7 @@ class SettingsRepository(private val context: Context) {
         val REPLAY_AFTER_ANSWER = booleanPreferencesKey("replay_after_answer")
         val VOLUME_VARIATION_ENABLED = booleanPreferencesKey("volume_variation_enabled")
         val MASTER_VOLUME = floatPreferencesKey("master_volume")
+        val TTS_VOLUME = floatPreferencesKey("tts_volume")
         val NOISE_TYPE = stringPreferencesKey("noise_type")
         val NOISE_VOLUME = floatPreferencesKey("noise_volume")
         val SLOPPY_MODE = stringPreferencesKey("sloppy_mode")
@@ -101,6 +102,7 @@ class SettingsRepository(private val context: Context) {
             replayAfterAnswer = p[Keys.REPLAY_AFTER_ANSWER] ?: false,
             volumeVariationEnabled = p[Keys.VOLUME_VARIATION_ENABLED] ?: true,
             masterVolume = (p[Keys.MASTER_VOLUME] ?: 0.85f).coerceIn(0f, 1f),
+            ttsVolume = (p[Keys.TTS_VOLUME] ?: 1.0f).coerceIn(0f, 1f),
             noiseType = NoiseType.entries.firstOrNull { it.name == p[Keys.NOISE_TYPE] } ?: NoiseType.NONE,
             noiseVolume = (p[Keys.NOISE_VOLUME] ?: 0.0f).coerceIn(0f, 1f),
             sloppyMode = SloppyMode.entries
@@ -128,6 +130,7 @@ class SettingsRepository(private val context: Context) {
         p[Keys.REPLAY_AFTER_ANSWER] = config.replayAfterAnswer
         p[Keys.VOLUME_VARIATION_ENABLED] = config.volumeVariationEnabled
         p[Keys.MASTER_VOLUME] = config.masterVolume
+        p[Keys.TTS_VOLUME] = config.ttsVolume
         p[Keys.NOISE_TYPE] = config.noiseType.name
         p[Keys.NOISE_VOLUME] = config.noiseVolume
         p[Keys.SLOPPY_MODE] = config.sloppyMode.name
@@ -221,6 +224,9 @@ class SettingsRepository(private val context: Context) {
         // split toggle - see the parse side for the migration logic.
         o.put("callsignRandomPrefix", config.callsignRandomPrefix)
         o.put("callsignRandomSuffix", config.callsignRandomSuffix)
+        // Core callsign length bounds (prefix + digit + suffix, no '/').
+        o.put("callsignMinLength", config.callsignMinLength)
+        o.put("callsignMaxLength", config.callsignMaxLength)
         // Selected characters for the Characters category, stored as a plain
         // string in canonical Morse order so the saved value is stable.
         val chars = Morse.characters.keys
@@ -326,6 +332,14 @@ class SettingsRepository(private val context: Context) {
             enabledNewsSources + customNewsFeeds.map { NewsSource.CUSTOM_PREFIX + it }
         }
         val newsNoRepeat = o.optBoolean("newsNoRepeat", true)
+        // Callsign length bounds: absent keys (older configs) fall back to
+        // the full range, i.e. the previous unfiltered behavior. Values are
+        // coerced so a bad save can never produce min > max.
+        val lengthRange = MixedConfig.CALLSIGN_LENGTH_RANGE
+        val callsignMinLength = o.optInt("callsignMinLength", lengthRange.first)
+            .coerceIn(lengthRange.first, lengthRange.last)
+        val callsignMaxLength = o.optInt("callsignMaxLength", lengthRange.last)
+            .coerceIn(callsignMinLength, lengthRange.last)
         return MixedConfig(
             // An empty selection is honored as the user's intent. The
             // first-run default (DEFAULT_KINDS / DEFAULT_COUNTRIES) is
@@ -343,6 +357,8 @@ class SettingsRepository(private val context: Context) {
             callsignRandomSuffix = if (hasNewSuffix)
                 o.optBoolean("callsignRandomSuffix", false)
             else legacy,
+            callsignMinLength = callsignMinLength,
+            callsignMaxLength = callsignMaxLength,
             characterSet = characterSet,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,

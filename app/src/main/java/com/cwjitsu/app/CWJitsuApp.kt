@@ -59,7 +59,7 @@ class CWJitsuApp : Application() {
         // Suppressible from Settings; failures (e.g. offline) are silent.
         orchestratorScope.launch {
             if (settings.updateCheckEnabledFlow.first()) {
-                updateChecker.check(BuildConfig.VERSION_NAME)
+                updateChecker.checkNow(BuildConfig.VERSION_NAME)
             }
         }
 

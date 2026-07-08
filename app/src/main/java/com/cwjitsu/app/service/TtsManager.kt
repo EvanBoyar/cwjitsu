@@ -148,12 +148,13 @@ class TtsManager(private val context: Context) {
         if (runNow) block()
     }
 
-    fun speak(text: String, utteranceId: String, onDone: (Boolean) -> Unit) {
+    /** [volume] scales this utterance only (0..1); 1.0 = engine full volume. */
+    fun speak(text: String, utteranceId: String, volume: Float = 1.0f, onDone: (Boolean) -> Unit) {
         if (initFailed) { Log.w(TAG, "speak DROP initFailed text=$text id=$utteranceId"); onDone(false); return }
         val engine = tts ?: run { Log.w(TAG, "speak DROP tts==null text=$text id=$utteranceId"); onDone(false); return }
         if (!ready) {
             Log.d(TAG, "speak QUEUED not-ready text=$text id=$utteranceId")
-            whenReady { speak(text, utteranceId, onDone) }
+            whenReady { speak(text, utteranceId, volume, onDone) }
             return
         }
         // Sanitize the caller-supplied prefix so it is safe to embed in
@@ -186,7 +187,10 @@ class TtsManager(private val context: Context) {
         // callback, so the captured continuation would suspend
         // forever. Resolve the callback ourselves so the orchestrator
         // progresses even in the synchronous-error case.
-        val status = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, uniqueId)
+        val params = android.os.Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume.coerceIn(0f, 1f))
+        }
+        val status = engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, uniqueId)
         Log.d(TAG, "speak engine.speak returned $status id=$uniqueId")
         if (status == TextToSpeech.ERROR) {
             Log.w(TAG, "speak synchronous ERROR, resolving callback id=$uniqueId")

@@ -66,6 +66,11 @@ data class MixedConfig(
     val newsCharFilter: CharFilter = CharFilter.EVERYTHING,
     val callsignRandomPrefix: Boolean = false,
     val callsignRandomSuffix: Boolean = false,
+    // Bounds on the generated core callsign length (prefix + digit + suffix,
+    // NOT counting any '/' decoration). Defaults span the full range the
+    // registry can produce, so out of the box nothing is filtered.
+    val callsignMinLength: Int = CALLSIGN_LENGTH_RANGE.first,
+    val callsignMaxLength: Int = CALLSIGN_LENGTH_RANGE.last,
     val characterSet: Set<Char> = DEFAULT_CHARACTER_SET,
     // Sub-toggles for the combined Prosigns & Q-codes category. Both default
     // on so selecting the category drills both, matching the old behavior of
@@ -89,6 +94,13 @@ data class MixedConfig(
 
         /** Default country selection: USA. */
         val DEFAULT_COUNTRIES: Set<String> = setOf("United States")
+
+        /**
+         * Everything the registry can emit: the shortest core callsign is
+         * ITU Generic's empty prefix + digit + 1 letter (2 chars), the
+         * longest is a 3-char prefix (e.g. KH6) + digit + 3 letters (7).
+         */
+        val CALLSIGN_LENGTH_RANGE: IntRange = 2..7
 
         /**
          * Which characters the Characters category draws from by default:

@@ -12,6 +12,13 @@ import java.net.URL
 /** A newer release spotted on GitHub. [version] has no leading "v". */
 data class UpdateInfo(val version: String, val url: String)
 
+/** Outcome of an explicit [UpdateChecker.checkNow], shown inline in Settings. */
+sealed interface CheckResult {
+    data class UpdateAvailable(val info: UpdateInfo) : CheckResult
+    data object UpToDate : CheckResult
+    data object Failed : CheckResult
+}
+
 /**
  * Checks GitHub for a newer tagged release than the running build. Runs once
  * per app launch (kicked from [com.cwjitsu.app.CWJitsuApp]) and only when the
@@ -53,7 +60,13 @@ class UpdateChecker {
     /** Non-null when a newer release exists; the UI shows a one-time alert. */
     val available: StateFlow<UpdateInfo?> = _available
 
-    suspend fun check(currentVersion: String) = withContext(Dispatchers.IO) {
+    /**
+     * The single check implementation, shared by the launch-time check
+     * (which ignores the result - [available] drives the Home alert) and
+     * the Settings "Check now" button (which shows the outcome inline).
+     * A newer release always sets [available].
+     */
+    suspend fun checkNow(currentVersion: String): CheckResult = withContext(Dispatchers.IO) {
         runCatching {
             val conn = (URL(LATEST_RELEASE_API).openConnection() as HttpURLConnection).apply {
                 connectTimeout = TIMEOUT_MS
@@ -64,21 +77,28 @@ class UpdateChecker {
             try {
                 if (conn.responseCode !in 200..299) {
                     Log.w(TAG, "update check HTTP ${conn.responseCode}")
-                    return@runCatching
+                    return@runCatching CheckResult.Failed
                 }
                 val body = conn.inputStream.use { it.readBytes().decodeToString() }
                 val o = JSONObject(body)
                 val tag = o.optString("tag_name")
                 if (tag.isNotBlank() && isNewer(tag, currentVersion)) {
-                    _available.value = UpdateInfo(
+                    val info = UpdateInfo(
                         version = tag.removePrefix("v"),
                         url = o.optString("html_url").ifBlank { RELEASES_PAGE },
                     )
+                    _available.value = info
+                    CheckResult.UpdateAvailable(info)
+                } else {
+                    CheckResult.UpToDate
                 }
             } finally {
                 conn.disconnect()
             }
-        }.onFailure { Log.w(TAG, "update check failed", it) }
+        }.getOrElse {
+            Log.w(TAG, "update check failed", it)
+            CheckResult.Failed
+        }
     }
 
     /** Clear the pending alert after the user has seen it. */

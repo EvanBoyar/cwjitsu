@@ -39,6 +39,11 @@ private const val RANDOM_DECORATION_PROBABILITY = 0.25f
  *      [RANDOM_DECORATION_PROBABILITY] independently for prefix and
  *      suffix, weighted toward "neither", so the user hears mostly bare
  *      callsigns with an occasional /prefix, /suffix, or both.
+ *
+ * [next]'s minLength / maxLength bound the CORE callsign length
+ * (prefix + digit + suffix, excluding any '/' decoration). Templates that
+ * can't reach the requested range are skipped when possible; otherwise the
+ * suffix length is clamped as close to the bounds as the template allows.
  */
 class CallsignGenerator(private val random: Random = Random.Default) {
 
@@ -48,6 +53,8 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         formatSuffix: String? = null,
         randomPrefix: Boolean = false,
         randomSuffix: Boolean = false,
+        minLength: Int = 0,
+        maxLength: Int = Int.MAX_VALUE,
     ): String {
         // Resolve effective prefix/suffix for this single call. When
         // random* is on, the side is independently rolled and a non-null
@@ -67,11 +74,28 @@ class CallsignGenerator(private val random: Random = Random.Default) {
             } else null
         } else formatSuffix
 
-        val tpl = country.templates.random(random)
+        // Length bounds apply to the CORE callsign (prefix + digit + suffix),
+        // not the '/' decoration. How far a template's reachable lengths sit
+        // outside [minLength, maxLength]; 0 means it can hit the range.
+        fun distance(t: CallsignTemplate): Int {
+            val shortest = t.prefix.length + 1 + t.suffixRange.first
+            val longest = t.prefix.length + 1 + t.suffixRange.last
+            return maxOf(minLength - longest, shortest - maxLength, 0)
+        }
+        // Prefer templates that can hit the range. When none can (e.g. every
+        // prefix in the country is too short for the min), use the ones that
+        // get closest, so a 7..7 request against 1-2 char prefixes yields a
+        // consistent 6 rather than a mix of 5s and 6s.
+        val best = country.templates.minOf(::distance)
+        val candidates = country.templates.filter { distance(it) == best }
+        val tpl = candidates.random(random)
         val digit = randomDigit()
-        val suffixLen = if (tpl.suffixRange.first == tpl.suffixRange.last)
-            tpl.suffixRange.first
-        else random.nextInt(tpl.suffixRange.first, tpl.suffixRange.last + 1)
+        val suffixLo = (minLength - tpl.prefix.length - 1)
+            .coerceIn(tpl.suffixRange.first, tpl.suffixRange.last)
+        val suffixHi = (maxLength - tpl.prefix.length - 1)
+            .coerceIn(tpl.suffixRange.first, tpl.suffixRange.last)
+        val suffixLen = if (suffixLo >= suffixHi) suffixLo
+        else random.nextInt(suffixLo, suffixHi + 1)
         val suffix = (1..suffixLen).map { randomChar() }.joinToString("")
         val coreCall = tpl.prefix + digit + suffix
         return buildString {
@@ -88,8 +112,10 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         formatSuffix: String? = null,
         randomPrefix: Boolean = false,
         randomSuffix: Boolean = false,
+        minLength: Int = 0,
+        maxLength: Int = Int.MAX_VALUE,
     ): List<String> = List(count) {
-        next(country, formatPrefix, formatSuffix, randomPrefix, randomSuffix)
+        next(country, formatPrefix, formatSuffix, randomPrefix, randomSuffix, minLength, maxLength)
     }
 
     private fun randomChar(): Char = ('A'..'Z').random(random)
