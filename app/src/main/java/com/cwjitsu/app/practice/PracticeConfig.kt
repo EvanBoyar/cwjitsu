@@ -36,6 +36,16 @@ enum class SloppyMode {
 data class PracticeConfig(
     val characterWpm: Int = 18,
     val farnsworthWpm: Int? = null,
+    /**
+     * When true, each sent item gets a random character speed drawn from
+     * [characterWpm] - [speedVarMinusWpm] .. [characterWpm] + [speedVarPlusWpm]
+     * (clamped to the valid 5..60 WPM window), like copying different
+     * operators on the band. Either side may be 0 for one-directional
+     * variation.
+     */
+    val speedVariabilityEnabled: Boolean = false,
+    val speedVarPlusWpm: Int = 3,
+    val speedVarMinusWpm: Int = 3,
     val repetitions: Int = 3,
     val postSendPauseMs: Long = 1500,
     val answerDelayMs: Long = 2000,
@@ -67,6 +77,8 @@ data class PracticeConfig(
 ) {
     init {
         require(characterWpm in 5..60) { "WPM out of range" }
+        require(speedVarPlusWpm in 0..MAX_SPEED_VARIATION_WPM)
+        require(speedVarMinusWpm in 0..MAX_SPEED_VARIATION_WPM)
         require(frequencyHz in 300..1500) { "Frequency out of range" }
         require(frequencyMinHz in 300..1500)
         require(frequencyMaxHz in 300..1500)
@@ -82,4 +94,9 @@ data class PracticeConfig(
      * speed, so only a value strictly below [characterWpm] has any effect.
      */
     fun effectiveFarnsworth(): Int? = farnsworthWpm?.takeIf { it < characterWpm }
+
+    companion object {
+        /** Largest +/- offset (WPM) the speed-variability slider allows. */
+        const val MAX_SPEED_VARIATION_WPM = 15
+    }
 }

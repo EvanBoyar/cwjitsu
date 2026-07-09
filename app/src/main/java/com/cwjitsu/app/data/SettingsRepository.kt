@@ -43,6 +43,9 @@ class SettingsRepository(private val context: Context) {
     object Keys {
         val CHARACTER_WPM = intPreferencesKey("character_wpm")
         val FARNSWORTH_WPM = intPreferencesKey("farnsworth_wpm")
+        val SPEED_VARIABILITY_ENABLED = booleanPreferencesKey("speed_variability_enabled")
+        val SPEED_VAR_PLUS_WPM = intPreferencesKey("speed_var_plus_wpm")
+        val SPEED_VAR_MINUS_WPM = intPreferencesKey("speed_var_minus_wpm")
         val REPETITIONS = intPreferencesKey("repetitions")
         val POST_SEND_PAUSE_MS = longPreferencesKey("post_send_pause_ms")
         val ANSWER_DELAY_MS = longPreferencesKey("answer_delay_ms")
@@ -90,6 +93,11 @@ class SettingsRepository(private val context: Context) {
         return PracticeConfig(
             characterWpm = (p[Keys.CHARACTER_WPM] ?: 18).coerceIn(5, 60),
             farnsworthWpm = p[Keys.FARNSWORTH_WPM]?.takeIf { it > 0 },
+            speedVariabilityEnabled = p[Keys.SPEED_VARIABILITY_ENABLED] ?: false,
+            speedVarPlusWpm = (p[Keys.SPEED_VAR_PLUS_WPM] ?: 3)
+                .coerceIn(0, PracticeConfig.MAX_SPEED_VARIATION_WPM),
+            speedVarMinusWpm = (p[Keys.SPEED_VAR_MINUS_WPM] ?: 3)
+                .coerceIn(0, PracticeConfig.MAX_SPEED_VARIATION_WPM),
             repetitions = (p[Keys.REPETITIONS] ?: 3).coerceIn(1, 20),
             postSendPauseMs = (p[Keys.POST_SEND_PAUSE_MS] ?: 1500L).coerceAtLeast(0L),
             answerDelayMs = (p[Keys.ANSWER_DELAY_MS] ?: 2000L).coerceAtLeast(0L),
@@ -118,6 +126,9 @@ class SettingsRepository(private val context: Context) {
     private fun writeConfig(p: MutablePreferences, config: PracticeConfig) {
         p[Keys.CHARACTER_WPM] = config.characterWpm
         p[Keys.FARNSWORTH_WPM] = config.farnsworthWpm ?: 0
+        p[Keys.SPEED_VARIABILITY_ENABLED] = config.speedVariabilityEnabled
+        p[Keys.SPEED_VAR_PLUS_WPM] = config.speedVarPlusWpm
+        p[Keys.SPEED_VAR_MINUS_WPM] = config.speedVarMinusWpm
         p[Keys.REPETITIONS] = config.repetitions
         p[Keys.POST_SEND_PAUSE_MS] = config.postSendPauseMs
         p[Keys.ANSWER_DELAY_MS] = config.answerDelayMs

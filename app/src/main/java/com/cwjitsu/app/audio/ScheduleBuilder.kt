@@ -71,12 +71,24 @@ class ScheduleBuilder(
     ): Schedule {
         if (items.isEmpty()) return Schedule(emptyList(), 0, sampleRate)
 
-        val timings = Timing.compute(config.characterWpm, config.effectiveFarnsworth())
-        val dotSamples = msToSamples(timings.dotMs)
-        val dashSamples = msToSamples(timings.dashMs)
-        val intraGapSamples = msToSamples(timings.intraGapMs)
-        val charGapSamples = msToSamples(timings.interCharGapMs)
-        val wordGapSamples = msToSamples(timings.interWordGapMs)
+        // Timing is rolled per ITEM (see emitItem) so speed variability can
+        // give each item its own character speed, the way frequency and
+        // amplitude already work. These are vars the closures below read.
+        val farnsworth = config.effectiveFarnsworth()
+        var dotSamples = 0
+        var dashSamples = 0
+        var intraGapSamples = 0
+        var charGapSamples = 0
+        var wordGapSamples = 0
+        fun applyTimingsFor(wpm: Int) {
+            val timings = Timing.compute(wpm, farnsworth)
+            dotSamples = msToSamples(timings.dotMs)
+            dashSamples = msToSamples(timings.dashMs)
+            intraGapSamples = msToSamples(timings.intraGapMs)
+            charGapSamples = msToSamples(timings.interCharGapMs)
+            wordGapSamples = msToSamples(timings.interWordGapMs)
+        }
+        applyTimingsFor(config.characterWpm)
 
         var cursor = 0
         val events = mutableListOf<ToneEvent>()
@@ -124,9 +136,12 @@ class ScheduleBuilder(
             // One random freq for the whole item so the user hears a single tone
             // per character/word/callsign, not a new tone per dit/dah. Same for
             // the amplitude: volume variation rolls once per item (like a
-            // different station's signal strength), not per element.
+            // different station's signal strength), not per element. Speed
+            // variability follows the same rule: one speed per item, so the
+            // item stays internally coherent like one operator sending it.
             val itemFreq = pickFreq(config)
             val itemAmp = pickAmp(config)
+            applyTimingsFor(pickWpm(config))
             if (item.morseOverride != null) {
                 // Prosign: emit the joined morse as a single tight symbol.
                 emitLetterMorse(
@@ -182,6 +197,18 @@ class ScheduleBuilder(
     private fun pickFreq(config: PracticeConfig): Int =
         if (config.randomizeFrequency) random.nextInt(config.frequencyMinHz, config.frequencyMaxHz + 1)
         else config.frequencyHz
+
+    /**
+     * Roll one character speed for a whole item within the configured
+     * +/- window, clamped to the valid 5..60 WPM range so an offset on a
+     * near-limit base speed can't produce an out-of-range value.
+     */
+    private fun pickWpm(config: PracticeConfig): Int {
+        if (!config.speedVariabilityEnabled) return config.characterWpm
+        val lo = (config.characterWpm - config.speedVarMinusWpm).coerceAtLeast(5)
+        val hi = (config.characterWpm + config.speedVarPlusWpm).coerceAtMost(60)
+        return if (lo >= hi) lo else random.nextInt(lo, hi + 1)
+    }
 
     /**
      * Roll one amplitude for a whole item, uniform in DECIBELS across

@@ -17,6 +17,7 @@ import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.ui.theme.cwSwitchColors
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.SloppyMode
+import kotlin.math.roundToInt
 
 /**
  * Reusable Compose panel that exposes the whole [PracticeConfig] to the user,
@@ -88,6 +89,37 @@ fun ConfigPanel(
             // the layout but cannot accidentally change a disabled value.
             enabled = farnsOn,
         )
+
+        // Speed variability: each sent item is rendered at a random character
+        // speed within [base - subtracted, base + added]. One two-thumb
+        // slider sets both offsets: the left thumb (<= 0) is the subtracted
+        // WPM, the right thumb (>= 0) the added WPM, so 0 (the base speed)
+        // always stays inside the window.
+        ToggleRow(
+            label = "Speed variability",
+            checked = config.speedVariabilityEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(speedVariabilityEnabled = on) } },
+        )
+        if (config.speedVariabilityEnabled) {
+            val maxVar = PracticeConfig.MAX_SPEED_VARIATION_WPM
+            LabeledRangeSlider(
+                label = "Variation (WPM)",
+                value = -config.speedVarMinusWpm.toFloat()..config.speedVarPlusWpm.toFloat(),
+                valueRange = -maxVar.toFloat()..maxVar.toFloat(),
+                steps = 2 * maxVar - 1,
+                valueLabel = "-${config.speedVarMinusWpm} / +${config.speedVarPlusWpm}",
+                onValueChange = { range ->
+                    onUpdate {
+                        it.copy(
+                            // Each thumb is pinned to its own side of 0 so the
+                            // stored offsets are always non-negative.
+                            speedVarMinusWpm = (-range.start.roundToInt()).coerceIn(0, maxVar),
+                            speedVarPlusWpm = range.endInclusive.roundToInt().coerceIn(0, maxVar),
+                        )
+                    }
+                },
+            )
+        }
 
         // ---------- Flow ----------
         HorizontalDivider()
@@ -321,6 +353,41 @@ private fun LabeledSlider(
             enabled = enabled,
             thumbColor = thumb,
             trackColor = track,
+        )
+    }
+}
+
+/**
+ * Two-thumb sibling of [LabeledSlider]: same label/value header, but the
+ * track carries a [DragOnlyRangeSlider] so one row can set a pair of
+ * bounds (e.g. the speed-variability -/+ offsets).
+ */
+@Composable
+private fun LabeledRangeSlider(
+    label: String,
+    value: ClosedFloatingPointRange<Float>,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    valueLabel: String,
+    onValueChange: (ClosedFloatingPointRange<Float>) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                valueLabel,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        DragOnlyRangeSlider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
         )
     }
 }
