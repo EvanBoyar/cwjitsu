@@ -7,10 +7,13 @@ answers after each item so you can check yourself hands-free.
 <p>
   <img src="docs/home.png" width="270" alt="Home screen: practice categories and transport controls">
   <img src="docs/settings.png" width="270" alt="Settings: speed, Farnsworth spacing, timing">
+  <img src="docs/news.png" width="270" alt="News: sources, settings">
 </p>
 
 ## Features
 
+- **Interesting practice**: Select from some common news sources or add your
+  own RSS/Atom feeds to listen to.
 - **Practice content**: characters, prosigns & Q-codes, English words, your
   own text, callsigns by country (with optional `/prefix` and `/suffix`
   decoration), and live news headlines from RSS feeds, cached offline-first
