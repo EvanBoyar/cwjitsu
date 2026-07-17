@@ -29,6 +29,7 @@ object ContentMixer {
         characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
         prosignsEnabled: Boolean = true,
         qcodesEnabled: Boolean = true,
+        abbreviationsEnabled: Boolean = true,
         newsItem: ContentItem? = null,
     ): List<ContentItem> {
         if (enabledKinds.isEmpty()) return emptyList()
@@ -48,13 +49,17 @@ object ContentMixer {
                     }
                 }
                 ContentKind.PROSIGNS_QCODES -> {
-                    // One combined category; emit a prosign and/or a Q-code
-                    // depending on the sub-toggles. Both off emits nothing.
+                    // One combined category; emit a prosign, Q-code, and/or
+                    // abbreviation depending on the sub-toggles. All off
+                    // emits nothing.
                     if (prosignsEnabled) {
                         out.addAll(ProsignContentGenerator(spokenMode = prosignMode).batch(1))
                     }
                     if (qcodesEnabled) {
                         out.addAll(QCodeContentGenerator().batch(1, nato))
+                    }
+                    if (abbreviationsEnabled) {
+                        out.addAll(AbbreviationContentGenerator().batch(1))
                     }
                 }
                 ContentKind.WORDS -> out.addAll(WordContentGenerator(words).batch(1))

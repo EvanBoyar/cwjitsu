@@ -86,7 +86,7 @@ class QCodeContentGenerator(
         "QRN" to "noise",
         "QSB" to "fading",
         "QSL" to "confirm",
-        "QRZ" to "calling",
+        "QRZ" to "who is calling me",
         "QSY" to "change frequency",
         "QRL" to "busy",
         "QRP" to "low power",
@@ -97,7 +97,36 @@ class QCodeContentGenerator(
         "QRV" to "ready",
         "QTR" to "time",
         "QSA" to "signal strength",
+        "QSO" to "contact",
+        "QSK" to "break in",
+        "QTC" to "messages to send",
+        "QRX" to "stand by",
+        "QRU" to "nothing for you",
+        "QSP" to "relay",
+        "QST" to "general call",
     )
+}
+
+/**
+ * Abbreviation generator: common CW abbreviations (73, TU, WX...) from
+ * [Morse.abbreviations]. Sent as ordinary spaced characters - unlike
+ * prosigns nothing is joined, because that is how abbreviations are keyed
+ * on the air. The spoken answer is the abbreviation's meaning, matching
+ * the Q-code behavior.
+ */
+class AbbreviationContentGenerator(
+    private val random: Random = Random.Default,
+) {
+    fun batch(count: Int): List<ContentItem> {
+        val keys = Morse.abbreviations.keys.toList()
+        return List(count) {
+            val abbr = keys.random(random)
+            ContentItem(
+                text = abbr,
+                spokenAnswer = Morse.abbreviations[abbr],
+            )
+        }
+    }
 }
 
 /**

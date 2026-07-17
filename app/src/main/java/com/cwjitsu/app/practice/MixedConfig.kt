@@ -72,11 +72,12 @@ data class MixedConfig(
     val callsignMinLength: Int = CALLSIGN_LENGTH_RANGE.first,
     val callsignMaxLength: Int = CALLSIGN_LENGTH_RANGE.last,
     val characterSet: Set<Char> = DEFAULT_CHARACTER_SET,
-    // Sub-toggles for the combined Prosigns & Q-codes category. Both default
-    // on so selecting the category drills both, matching the old behavior of
-    // enabling the two separate categories.
+    // Sub-toggles for the combined Prosigns & Q-codes category. All default
+    // on so selecting the category drills everything, matching the old
+    // behavior of enabling the two separate categories.
     val prosignsEnabled: Boolean = true,
     val qcodesEnabled: Boolean = true,
+    val abbreviationsEnabled: Boolean = true,
     // News: which built-in sources are on (by NewsSource id) and any custom
     // RSS/Atom feed URLs the user added.
     val enabledNewsSources: Set<String> = DEFAULT_NEWS_SOURCES,

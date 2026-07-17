@@ -290,6 +290,10 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         scope.launch { app.settings.updateMixedConfig { it.copy(qcodesEnabled = enabled) } }
     }
 
+    fun setAbbreviationsEnabled(enabled: Boolean) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(abbreviationsEnabled = enabled) } }
+    }
+
     fun setCallsignRandomSuffix(enabled: Boolean) {
         scope.launch {
             app.settings.updateMixedConfig { it.copy(callsignRandomSuffix = enabled) }
@@ -345,6 +349,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             characterPool = current.characterSet,
             prosignsEnabled = current.prosignsEnabled,
             qcodesEnabled = current.qcodesEnabled,
+            abbreviationsEnabled = current.abbreviationsEnabled,
             newsItem = newsItem,
         )
     }
@@ -513,21 +518,24 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             }
 
             // Per-category settings for the combined Prosigns & Q-codes card:
-            // choose which of the two to drill, plus the prosign spoken-answer
-            // style (only relevant while prosigns are on).
+            // choose which of the three to drill, plus the prosign
+            // spoken-answer style (only relevant while prosigns are on).
             if (ContentKind.PROSIGNS_QCODES in effectiveConfig.enabledKinds) {
                 Text(
                     "Prosigns & Q-codes",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    "Pick which of the two this category sends.",
+                    "Pick which of these this category sends.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 )
-                if (!effectiveConfig.prosignsEnabled && !effectiveConfig.qcodesEnabled) {
+                if (!effectiveConfig.prosignsEnabled &&
+                    !effectiveConfig.qcodesEnabled &&
+                    !effectiveConfig.abbreviationsEnabled
+                ) {
                     Text(
-                        "Both are off - this category will stay silent until you enable one.",
+                        "All are off - this category will stay silent until you enable one.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -541,6 +549,11 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     label = "Q-codes (QTH, QSL...)",
                     checked = effectiveConfig.qcodesEnabled,
                     onCheckedChange = { setQcodesEnabled(it) },
+                )
+                ToggleRow(
+                    label = "Abbreviations (73, TU, WX...)",
+                    checked = effectiveConfig.abbreviationsEnabled,
+                    onCheckedChange = { setAbbreviationsEnabled(it) },
                 )
 
                 // Prosign spoken-answer style, shown only while prosigns are on.

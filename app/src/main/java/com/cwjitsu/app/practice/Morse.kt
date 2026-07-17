@@ -42,8 +42,7 @@ object Morse {
         "AR" to ".-.-.",     // end of message
         "AS" to ".-...",     // wait
         "BT" to "-...-",     // break / new section
-        "CT" to "-.-.-",     // start of message (also KA): C + T joined
-        "DO" to "-..---",    // shift to alternate code
+        "KA" to "-.-.-",     // start of message; NA hams write KA, Europe/maritime write CT
         "KN" to "-.--.",     // invitation to named station only
         "SK" to "...-.-",    // end of contact
         "SOS" to "...---...",// distress
@@ -58,12 +57,72 @@ object Morse {
         "AR" to "end of message",
         "AS" to "wait",
         "BT" to "break",
-        "CT" to "start of message",
-        "DO" to "shift to alternate code",
+        "KA" to "start of message",
         "KN" to "over to you only",
         "SK" to "end of contact",
         "SOS" to "distress",
         "HH" to "error",
+    )
+
+    /**
+     * Common CW abbreviations mapped to their spoken meaning. Unlike
+     * prosigns these are sent as ordinary spaced characters - nothing is
+     * joined - so they go through the normal per-character schedule path.
+     */
+    val abbreviations: Map<String, String> = linkedMapOf(
+        "73" to "best regards",
+        "88" to "hugs and kisses",
+        "5NN" to "five nine nine",
+        "ABT" to "about",
+        "AGN" to "again",
+        "ANT" to "antenna",
+        "B4" to "before",
+        "BCNU" to "be seeing you",
+        "BK" to "break",
+        "BTU" to "back to you",
+        "CL" to "closing station",
+        "CONDX" to "conditions",
+        "CQ" to "calling any station",
+        "CUL" to "see you later",
+        "DE" to "this is",
+        "DX" to "long distance",
+        "ES" to "and",
+        "FB" to "fine business",
+        "FER" to "for",
+        "GA" to "good afternoon",
+        "GB" to "goodbye",
+        "GE" to "good evening",
+        "GL" to "good luck",
+        "GM" to "good morning",
+        "GN" to "good night",
+        "GUD" to "good",
+        "HI" to "laughter",
+        "HPE" to "hope",
+        "HR" to "here",
+        "HW" to "how copy",
+        "LID" to "poor operator",
+        "MNI" to "many",
+        "MSG" to "message",
+        "NR" to "number",
+        "NW" to "now",
+        "OM" to "old man",
+        "OP" to "operator",
+        "OT" to "old timer",
+        "PSE" to "please",
+        "PWR" to "power",
+        "RPT" to "repeat",
+        "RST" to "signal report",
+        "SIG" to "signal",
+        "SRI" to "sorry",
+        "TKS" to "thanks",
+        "TNX" to "thanks",
+        "TU" to "thank you",
+        "UR" to "your",
+        "VY" to "very",
+        "WKD" to "worked",
+        "WX" to "weather",
+        "XYL" to "wife",
+        "YL" to "young lady",
     )
 
     /**
@@ -72,9 +131,9 @@ object Morse {
     val qCodes: List<String> = listOf(
         "QRA", "QRB", "QRD", "QRE", "QRF", "QRG", "QRH", "QRI", "QRJ", "QRK",
         "QRL", "QRM", "QRN", "QRO", "QRP", "QRQ", "QRS", "QRT", "QRU", "QRV",
-        "QRW", "QRX", "QRY", "QRZ", "QSA", "QSB", "QSD", "QSG", "QSL", "QSM",
-        "QSN", "QSO", "QSP", "QSR", "QSS", "QST", "QSU", "QSV", "QSW", "QSX",
-        "QSY", "QSZ", "QTH", "QTR", "QTX",
+        "QRW", "QRX", "QRY", "QRZ", "QSA", "QSB", "QSD", "QSG", "QSK", "QSL",
+        "QSM", "QSN", "QSO", "QSP", "QSR", "QSS", "QST", "QSU", "QSV", "QSW",
+        "QSX", "QSY", "QSZ", "QTC", "QTH", "QTR", "QTX",
     )
 
     /**

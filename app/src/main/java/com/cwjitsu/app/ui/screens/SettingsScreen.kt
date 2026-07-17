@@ -120,6 +120,26 @@ fun SettingsScreen(onBack: () -> Unit) {
                 onCheck = { app.updateChecker.checkNow(BuildConfig.VERSION_NAME) },
             )
 
+            HorizontalDivider()
+
+            // Content disclaimer: the practice material mirrors on-air
+            // convention, not the author's views. Wording approved by the
+            // author; change only with their sign-off.
+            Text(
+                "The terminology, abbreviations, countries, and territories " +
+                    "in this app are included solely for practice realism. " +
+                    "They reflect what is conventionally heard on the air, " +
+                    "including some dated expressions, and their inclusion " +
+                    "or omission does not represent an endorsement, " +
+                    "rejection, or position of any kind by the author. " +
+                    "Country entries are organized by radio callsign " +
+                    "allocation rather than political geography, so some " +
+                    "listings are territories or call areas rather than " +
+                    "sovereign states.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+
             Box(modifier = Modifier.padding(bottom = 24.dp))
         }
     }

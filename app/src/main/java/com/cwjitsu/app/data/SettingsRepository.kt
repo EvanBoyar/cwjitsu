@@ -247,6 +247,7 @@ class SettingsRepository(private val context: Context) {
         // Sub-toggles for the combined Prosigns & Q-codes category.
         o.put("prosignsEnabled", config.prosignsEnabled)
         o.put("qcodesEnabled", config.qcodesEnabled)
+        o.put("abbreviationsEnabled", config.abbreviationsEnabled)
         // News source selection.
         val sources = JSONArray()
         for (s in config.enabledNewsSources.sorted()) sources.put(s)
@@ -323,6 +324,9 @@ class SettingsRepository(private val context: Context) {
             hasLegacyProsigns || hasLegacyQcodes -> hasLegacyQcodes
             else -> true
         }
+        // Abbreviations arrived after the combined card; absent key means a
+        // config saved before the feature - default on so it's discoverable.
+        val abbreviationsEnabled = o.optBoolean("abbreviationsEnabled", true)
         // News sources: absent means a pre-News config - seed the defaults.
         val enabledNewsSources = if (o.has("enabledNewsSources")) {
             val a = o.optJSONArray("enabledNewsSources") ?: JSONArray()
@@ -373,6 +377,7 @@ class SettingsRepository(private val context: Context) {
             characterSet = characterSet,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,
+            abbreviationsEnabled = abbreviationsEnabled,
             enabledNewsSources = migratedNewsSources,
             customNewsFeeds = customNewsFeeds,
             newsNoRepeat = newsNoRepeat,
