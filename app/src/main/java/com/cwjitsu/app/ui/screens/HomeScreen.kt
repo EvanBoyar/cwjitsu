@@ -558,8 +558,8 @@ fun HomeScreen(onPickSettings: () -> Unit) {
 
                 // Spoken-answer style, shared by prosigns, Q-codes, and
                 // abbreviations. Both chips can be on at once to hear the
-                // characters and then the meaning; the last one on cannot
-                // be turned off (SpokenAnswerMode.of returns null).
+                // characters and then the meaning; both off means these
+                // items get no spoken answer at all.
                 if (effectiveConfig.prosignsEnabled ||
                     effectiveConfig.qcodesEnabled ||
                     effectiveConfig.abbreviationsEnabled
@@ -574,10 +574,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         FilterChip(
                             selected = mode.speaksLiteral,
                             onClick = {
-                                SpokenAnswerMode.of(!mode.speaksLiteral, mode.speaksMeaning)?.let { new ->
-                                    scope.launch {
-                                        app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
-                                    }
+                                val new = SpokenAnswerMode.of(!mode.speaksLiteral, mode.speaksMeaning)
+                                scope.launch {
+                                    app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
                                 }
                             },
                             label = { Text("Characters (\"A S\")") },
@@ -585,13 +584,19 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         FilterChip(
                             selected = mode.speaksMeaning,
                             onClick = {
-                                SpokenAnswerMode.of(mode.speaksLiteral, !mode.speaksMeaning)?.let { new ->
-                                    scope.launch {
-                                        app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
-                                    }
+                                val new = SpokenAnswerMode.of(mode.speaksLiteral, !mode.speaksMeaning)
+                                scope.launch {
+                                    app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
                                 }
                             },
                             label = { Text("Meaning (\"wait\")") },
+                        )
+                    }
+                    if (mode == SpokenAnswerMode.NONE) {
+                        Text(
+                            "Both off - these items play with no spoken answer.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         )
                     }
                 }
@@ -859,13 +864,31 @@ private fun CategoryCard(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Icon(
-                    imageVector = kind.icon(),
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp),
-                    tint = if (selected) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                // The Characters card shows a literal "A1?" glyph instead of
+                // a stock icon: no Material icon conveys letters + digits +
+                // punctuation, which is exactly the set this category drills.
+                if (kind == ContentKind.CHARACTERS) {
+                    Box(
+                        modifier = Modifier.height(36.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "A1?",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = kind.icon(),
+                        contentDescription = null,
+                        modifier = Modifier.size(36.dp),
+                        tint = if (selected) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     text = kind.label(),
                     style = MaterialTheme.typography.titleMedium,

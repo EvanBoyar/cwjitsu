@@ -10,6 +10,8 @@ package com.cwjitsu.app.practice
  * and abbreviations).
  */
 enum class SpokenAnswerMode {
+    /** No spoken answer at all: the code is sent, nothing is spoken. */
+    NONE,
     /** Speak the literal characters, e.g. "A S" for <AS>. */
     LITERAL,
     /** Speak the plain-English meaning, e.g. "wait" for <AS>. */
@@ -17,16 +19,16 @@ enum class SpokenAnswerMode {
     /** Speak both, characters first: "A S, wait". */
     BOTH;
 
-    val speaksLiteral: Boolean get() = this != MEANING
-    val speaksMeaning: Boolean get() = this != LITERAL
+    val speaksLiteral: Boolean get() = this == LITERAL || this == BOTH
+    val speaksMeaning: Boolean get() = this == MEANING || this == BOTH
 
     companion object {
-        /** Combine the two flags into a mode; null when both are off. */
-        fun of(literal: Boolean, meaning: Boolean): SpokenAnswerMode? = when {
+        /** Combine the two flags into a mode. */
+        fun of(literal: Boolean, meaning: Boolean): SpokenAnswerMode = when {
             literal && meaning -> BOTH
             literal -> LITERAL
             meaning -> MEANING
-            else -> null
+            else -> NONE
         }
     }
 }

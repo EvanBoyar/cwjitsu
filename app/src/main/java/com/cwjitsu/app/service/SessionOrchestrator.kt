@@ -296,7 +296,13 @@ class SessionOrchestrator(
 
         delay(config.postSendPauseMs)
 
-        if (config.answerEnabled) {
+        // A null spokenAnswer falls back to speaking the item text; an
+        // explicitly BLANK one means "this item has no spoken answer"
+        // (e.g. shorthand with the spoken-answer mode set to none), so
+        // the whole answer sequence - delay, TTS, replay - is skipped.
+        val rawAnswer = item.spokenAnswer ?: item.text
+        val speakAnswer = config.answerEnabled && rawAnswer.isNotBlank()
+        if (speakAnswer) {
             delay(config.answerDelayMs)
             // Sanitize the spoken text before it reaches the TTS
             // engine. The platform TextToSpeech implementation on
@@ -315,7 +321,6 @@ class SessionOrchestrator(
             // English so the engine treats it as a single spoken
             // sentence and fires `onDone` only when the whole
             // answer is finished.
-            val rawAnswer = item.spokenAnswer ?: item.text
             val answer = rawAnswer.replace("/", " stroke ")
             Log.d(TAG, "playItem awaitTts ENTER answer='${answer.take(80)}' id='${item.text}'")
             val ok = awaitTts(answer, item.text, config.ttsVolume)
@@ -365,7 +370,7 @@ class SessionOrchestrator(
             // listener still feels the pip as part of the same
             // sequence. Only needed when an answer (TTS) was actually
             // spoken for this item; otherwise skip the wait.
-            if (config.answerEnabled) delay(400)
+            if (speakAnswer) delay(400)
             playCourtesyTone(config)
             Log.d(TAG, "playCourtesyTone EXIT")
 

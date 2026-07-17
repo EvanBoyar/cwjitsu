@@ -26,9 +26,12 @@ class CharacterContentGenerator(
  * Renders a shorthand spoken answer from its literal spelling and (possibly
  * unknown) meaning, per [mode]. BOTH speaks the characters first, then the
  * meaning after a comma pause; an unknown meaning falls back to the literal.
+ * NONE returns "" - an explicitly blank answer the orchestrator treats as
+ * "speak nothing" (null would fall back to speaking the item text).
  */
 private fun shorthandAnswer(mode: SpokenAnswerMode, literal: String, meaning: String?): String =
     when (mode) {
+        SpokenAnswerMode.NONE -> ""
         SpokenAnswerMode.LITERAL -> literal
         SpokenAnswerMode.MEANING -> meaning ?: literal
         SpokenAnswerMode.BOTH -> if (meaning == null) literal else "$literal, $meaning"
@@ -94,33 +97,59 @@ class QCodeContentGenerator(
     }
 
     /**
-     * Maps a few common Q-codes to shortened spoken answers. Falls back to
-     * NATO / literal for less common codes.
+     * Short spoken meaning for every Q-code in [Morse.qCodes], favoring the
+     * amateur-radio sense where it differs from modern ITU (e.g. QRJ keeps
+     * the original "signals too weak"). Grounded in the ARRL Q-signals
+     * reference sheet and the ITU table on Wikipedia's Q-code article.
      */
     private fun rememberSpoken(): Map<String, String> = mapOf(
-        "QTH" to "your location",
+        "QRA" to "station name",
+        "QRB" to "distance between stations",
+        "QRD" to "your destination",
+        "QRE" to "estimated arrival time",
+        "QRF" to "returning to place",
+        "QRG" to "exact frequency",
+        "QRH" to "frequency varies",
+        "QRI" to "transmission tone",
+        "QRJ" to "signals too weak",
+        "QRK" to "readability",
+        "QRL" to "busy",
         "QRM" to "interference",
         "QRN" to "noise",
-        "QSB" to "fading",
-        "QSL" to "confirm",
-        "QRZ" to "who is calling me",
-        "QSY" to "change frequency",
-        "QRL" to "busy",
-        "QRP" to "low power",
         "QRO" to "high power",
-        "QRS" to "slow down",
+        "QRP" to "low power",
         "QRQ" to "speed up",
+        "QRS" to "slow down",
         "QRT" to "stop sending",
-        "QRV" to "ready",
-        "QTR" to "time",
-        "QSA" to "signal strength",
-        "QSO" to "contact",
-        "QSK" to "break in",
-        "QTC" to "messages to send",
-        "QRX" to "stand by",
         "QRU" to "nothing for you",
+        "QRV" to "ready",
+        "QRW" to "inform them I'm calling",
+        "QRX" to "stand by",
+        "QRY" to "your turn number",
+        "QRZ" to "who is calling me",
+        "QSA" to "signal strength",
+        "QSB" to "fading",
+        "QSD" to "keying defective",
+        "QSG" to "send messages in batches",
+        "QSK" to "break in",
+        "QSL" to "confirm",
+        "QSM" to "repeat last message",
+        "QSN" to "heard you on frequency",
+        "QSO" to "contact",
         "QSP" to "relay",
+        "QSR" to "repeat your call",
+        "QSS" to "working frequency",
         "QST" to "general call",
+        "QSU" to "reply on this frequency",
+        "QSV" to "send series of Vs",
+        "QSW" to "sending on this frequency",
+        "QSX" to "listening on frequency",
+        "QSY" to "change frequency",
+        "QSZ" to "send each word twice",
+        "QTC" to "messages to send",
+        "QTH" to "your location",
+        "QTR" to "time",
+        "QTX" to "keep station open",
     )
 }
 
