@@ -88,7 +88,7 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         // consistent 6 rather than a mix of 5s and 6s.
         val best = country.templates.minOf(::distance)
         val candidates = country.templates.filter { distance(it) == best }
-        val tpl = candidates.random(random)
+        val tpl = weightedPick(candidates)
         val digit = randomDigit()
         val suffixLo = (minLength - tpl.prefix.length - 1)
             .coerceIn(tpl.suffixRange.first, tpl.suffixRange.last)
@@ -116,6 +116,18 @@ class CallsignGenerator(private val random: Random = Random.Default) {
         maxLength: Int = Int.MAX_VALUE,
     ): List<String> = List(count) {
         next(country, formatPrefix, formatSuffix, randomPrefix, randomSuffix, minLength, maxLength)
+    }
+
+    /**
+     * Sample a template proportionally to [CallsignTemplate.weight].
+     * Non-positive weights are treated as 0 (never picked); if every
+     * candidate is non-positive, fall back to uniform.
+     */
+    private fun weightedPick(candidates: List<CallsignTemplate>): CallsignTemplate {
+        val total = candidates.sumOf { maxOf(it.weight, 0) }
+        if (total <= 0) return candidates.random(random)
+        var r = random.nextInt(total)
+        return candidates.first { r -= maxOf(it.weight, 0); r < 0 }
     }
 
     private fun randomChar(): Char = ('A'..'Z').random(random)
