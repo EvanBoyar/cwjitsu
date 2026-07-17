@@ -20,7 +20,7 @@ import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.NewsSource
 import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
-import com.cwjitsu.app.practice.ProsignSpokenMode
+import com.cwjitsu.app.practice.SpokenAnswerMode
 import com.cwjitsu.app.practice.SloppyMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -66,7 +66,10 @@ class SettingsRepository(private val context: Context) {
         // Legacy key from the previous slot-based model. Kept here only so
         // we can clean it up on the next save. Old data is abandoned.
         val MIXED_SLOTS_JSON_LEGACY = stringPreferencesKey("mixed_slots_json")
-        val PROSIGN_SPOKEN_MODE = stringPreferencesKey("prosign_spoken_mode")
+        // Replaces the old prosign-only "prosign_spoken_mode" key; the new
+        // mode covers all shorthand (prosigns, Q-codes, abbreviations) and
+        // defaults to BOTH, so old values are deliberately not migrated.
+        val SHORTHAND_SPOKEN_MODE = stringPreferencesKey("shorthand_spoken_mode")
         val NATO_SPOKEN_ANSWERS = booleanPreferencesKey("nato_spoken_answers")
         val UPDATE_CHECK_ENABLED = booleanPreferencesKey("update_check_enabled")
     }
@@ -116,9 +119,9 @@ class SettingsRepository(private val context: Context) {
             sloppyMode = SloppyMode.entries
                 .firstOrNull { it.name == p[Keys.SLOPPY_MODE] }
                 ?: SloppyMode.OFF,
-            prosignSpokenMode = ProsignSpokenMode.entries
-                .firstOrNull { it.name == p[Keys.PROSIGN_SPOKEN_MODE] }
-                ?: ProsignSpokenMode.LITERAL,
+            shorthandSpokenMode = SpokenAnswerMode.entries
+                .firstOrNull { it.name == p[Keys.SHORTHAND_SPOKEN_MODE] }
+                ?: SpokenAnswerMode.BOTH,
             natoSpokenAnswers = p[Keys.NATO_SPOKEN_ANSWERS] ?: true,
         )
     }
@@ -145,7 +148,7 @@ class SettingsRepository(private val context: Context) {
         p[Keys.NOISE_TYPE] = config.noiseType.name
         p[Keys.NOISE_VOLUME] = config.noiseVolume
         p[Keys.SLOPPY_MODE] = config.sloppyMode.name
-        p[Keys.PROSIGN_SPOKEN_MODE] = config.prosignSpokenMode.name
+        p[Keys.SHORTHAND_SPOKEN_MODE] = config.shorthandSpokenMode.name
         p[Keys.NATO_SPOKEN_ANSWERS] = config.natoSpokenAnswers
     }
 

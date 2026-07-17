@@ -8,15 +8,16 @@ package com.cwjitsu.app.practice
  * deterministic. Callsigns are emitted one per country per round, in sorted
  * country-name order, so the user hears a predictable cadence. The [nato]
  * flag toggles between NATO phonetics and per-character literal pronunciation
- * for characters, Q-codes, callsigns, and free text. Prosigns always use
- * their own [prosignMode] and are unaffected by [nato].
+ * for characters, Q-codes, callsigns, and free text. Shorthand items
+ * (prosigns, Q-codes, abbreviations) speak characters, meaning, or both per
+ * [shorthandMode]; prosign spellings are unaffected by [nato].
  */
 object ContentMixer {
 
     fun build(
         enabledKinds: Set<ContentKind>,
         words: List<String>,
-        prosignMode: ProsignSpokenMode = ProsignSpokenMode.LITERAL,
+        shorthandMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
         nato: Boolean = true,
         callsignCountries: Set<String> = MixedConfig.DEFAULT_COUNTRIES,
         textSource: String = "",
@@ -53,13 +54,13 @@ object ContentMixer {
                     // abbreviation depending on the sub-toggles. All off
                     // emits nothing.
                     if (prosignsEnabled) {
-                        out.addAll(ProsignContentGenerator(spokenMode = prosignMode).batch(1))
+                        out.addAll(ProsignContentGenerator(spokenMode = shorthandMode).batch(1))
                     }
                     if (qcodesEnabled) {
-                        out.addAll(QCodeContentGenerator().batch(1, nato))
+                        out.addAll(QCodeContentGenerator(spokenMode = shorthandMode).batch(1, nato))
                     }
                     if (abbreviationsEnabled) {
-                        out.addAll(AbbreviationContentGenerator().batch(1))
+                        out.addAll(AbbreviationContentGenerator(spokenMode = shorthandMode).batch(1, nato))
                     }
                 }
                 ContentKind.WORDS -> out.addAll(WordContentGenerator(words).batch(1))

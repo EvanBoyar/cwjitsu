@@ -21,7 +21,7 @@ import kotlin.math.roundToInt
 
 /**
  * Reusable Compose panel that exposes the whole [PracticeConfig] to the user,
- * grouped into titled sections (Speed / Flow / Spoken answers / Keying /
+ * grouped into titled sections (Speed / Realism / Flow / Spoken answers /
  * Tone / Background noise) separated by dividers.
  *
  * Edits are emitted as TRANSFORMS ([onUpdate] receives a `(config) -> config`
@@ -90,6 +90,13 @@ fun ConfigPanel(
             enabled = farnsOn,
         )
 
+        // ---------- Realism ----------
+        // Everything that makes the audio sound like real operators on a
+        // real band instead of a machine: per-item speed spread, humanized
+        // keying, wandering tone frequency, and per-item volume changes.
+        HorizontalDivider()
+        Text("Realism", style = MaterialTheme.typography.titleLarge)
+
         // Speed variability: each sent item is rendered at a random character
         // speed within [base - subtracted, base + added]. One two-thumb
         // slider sets both offsets: the left thumb (<= 0) is the subtracted
@@ -120,6 +127,46 @@ fun ConfigPanel(
                 },
             )
         }
+
+        // Keying character: clean machine timing vs humanized straight-key
+        // jitter.
+        Text("Keying character", style = MaterialTheme.typography.bodyLarge)
+        SloppyModeRow(
+            current = config.sloppyMode,
+            onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
+        )
+
+        ToggleRow(
+            label = "Randomize tone frequency",
+            checked = config.randomizeFrequency,
+            onCheckedChange = { on -> onUpdate { it.copy(randomizeFrequency = on) } },
+        )
+        if (config.randomizeFrequency) {
+            // Both bounds on one two-thumb slider; RangeSlider keeps
+            // start <= end, so PracticeConfig's min <= max invariant holds
+            // by construction.
+            LabeledRangeSlider(
+                label = "Frequency range (Hz)",
+                value = config.frequencyMinHz.toFloat()..config.frequencyMaxHz.toFloat(),
+                valueRange = 300f..1500f,
+                steps = 119,
+                valueLabel = "${config.frequencyMinHz}-${config.frequencyMaxHz}Hz",
+                onValueChange = { range ->
+                    onUpdate {
+                        it.copy(
+                            frequencyMinHz = range.start.roundToInt().coerceIn(300, 1500),
+                            frequencyMaxHz = range.endInclusive.roundToInt().coerceIn(300, 1500),
+                        )
+                    }
+                },
+            )
+        }
+
+        ToggleRow(
+            label = "Volume variation per item",
+            checked = config.volumeVariationEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
+        )
 
         // ---------- Flow ----------
         HorizontalDivider()
@@ -215,15 +262,6 @@ fun ConfigPanel(
             enabled = config.answerEnabled,
         )
 
-        // ---------- Keying ----------
-        HorizontalDivider()
-        Text("Keying character", style = MaterialTheme.typography.titleLarge)
-
-        SloppyModeRow(
-            current = config.sloppyMode,
-            onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
-        )
-
         // ---------- Tone ----------
         HorizontalDivider()
         Text("Tone", style = MaterialTheme.typography.titleLarge)
@@ -237,39 +275,6 @@ fun ConfigPanel(
             onValueChange = { v -> onUpdate { it.copy(frequencyHz = v.toInt()) } },
         )
 
-        ToggleRow(
-            label = "Randomize tone frequency",
-            checked = config.randomizeFrequency,
-            onCheckedChange = { on -> onUpdate { it.copy(randomizeFrequency = on) } },
-        )
-
-        if (config.randomizeFrequency) {
-            // Each bound clamps against the other so min can never cross
-            // above max: PracticeConfig requires min <= max, and an
-            // unconstrained pair of sliders used to make that invariant
-            // trivially violable (crashing in the copy() call).
-            LabeledSlider(
-                label = "Random frequency min",
-                value = config.frequencyMinHz.toFloat(),
-                valueRange = 300f..1500f,
-                steps = 119,
-                valueLabel = "${config.frequencyMinHz}Hz",
-                onValueChange = { v ->
-                    onUpdate { it.copy(frequencyMinHz = v.toInt().coerceAtMost(it.frequencyMaxHz)) }
-                },
-            )
-            LabeledSlider(
-                label = "Random frequency max",
-                value = config.frequencyMaxHz.toFloat(),
-                valueRange = 300f..1500f,
-                steps = 119,
-                valueLabel = "${config.frequencyMaxHz}Hz",
-                onValueChange = { v ->
-                    onUpdate { it.copy(frequencyMaxHz = v.toInt().coerceAtLeast(it.frequencyMinHz)) }
-                },
-            )
-        }
-
         LabeledSlider(
             label = "Master volume",
             value = config.masterVolume,
@@ -279,32 +284,41 @@ fun ConfigPanel(
             onValueChange = { v -> onUpdate { it.copy(masterVolume = v) } },
         )
 
-        ToggleRow(
-            label = "Volume variation per item",
-            checked = config.volumeVariationEnabled,
-            onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
-        )
-
         // ---------- Background noise ----------
         HorizontalDivider()
         Text("Background noise", style = MaterialTheme.typography.titleLarge)
 
-        for (t in NoiseType.entries) {
-            NoiseRow(
-                label = t.name,
-                selected = config.noiseType == t,
-                onSelect = { onUpdate { it.copy(noiseType = t) } },
+        // One master switch; NoiseType.NONE is the stored "off" state, so
+        // turning the switch on picks WHITE as a starting type. The type
+        // chips and volume slider only appear while noise is on.
+        ToggleRow(
+            label = "Enable background noise",
+            checked = config.noiseType != NoiseType.NONE,
+            onCheckedChange = { on ->
+                onUpdate { it.copy(noiseType = if (on) NoiseType.WHITE else NoiseType.NONE) }
+            },
+        )
+        if (config.noiseType != NoiseType.NONE) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NoiseType.entries.filter { it != NoiseType.NONE }.forEach { t ->
+                    FilterChip(
+                        selected = config.noiseType == t,
+                        onClick = { onUpdate { it.copy(noiseType = t) } },
+                        label = {
+                            Text(t.name.lowercase().replaceFirstChar { c -> c.uppercase() })
+                        },
+                    )
+                }
+            }
+            LabeledSlider(
+                label = "Noise volume",
+                value = config.noiseVolume,
+                valueRange = 0f..1f,
+                steps = 99,
+                valueLabel = "%.0f%%".format(config.noiseVolume * 100),
+                onValueChange = { v -> onUpdate { it.copy(noiseVolume = v) } },
             )
         }
-
-        LabeledSlider(
-            label = "Noise volume",
-            value = config.noiseVolume,
-            valueRange = 0f..1f,
-            steps = 99,
-            valueLabel = "%.0f%%".format(config.noiseVolume * 100),
-            onValueChange = { v -> onUpdate { it.copy(noiseVolume = v) } },
-        )
     }
 }
 
@@ -437,18 +451,5 @@ fun ToggleRow(
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = labelColor)
         Switch(checked = checked, onCheckedChange = onCheckedChange, colors = cwSwitchColors(), enabled = enabled)
-    }
-}
-
-@Composable
-private fun NoiseRow(label: String, selected: Boolean, onSelect: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = selected, onCheckedChange = { onSelect() }, colors = cwSwitchColors())
     }
 }

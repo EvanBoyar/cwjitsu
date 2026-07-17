@@ -14,7 +14,7 @@ answers after each item so you can check yourself hands-free.
 
 - **Interesting practice**: Select from some common news sources or add your
   own RSS/Atom feeds to listen to.
-- **Practice content**: characters, prosigns & Q-codes, English words, your
+- **Practice content**: characters, CW shorthand (prosigns, Q-codes, abbreviations), English words, your
   own text, callsigns by country (with optional `/prefix` and `/suffix`
   decoration), and live news headlines from RSS feeds, cached offline-first
   so practice never waits on a connection.

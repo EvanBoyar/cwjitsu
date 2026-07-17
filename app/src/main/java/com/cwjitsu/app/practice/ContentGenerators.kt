@@ -23,31 +23,44 @@ class CharacterContentGenerator(
 }
 
 /**
+ * Renders a shorthand spoken answer from its literal spelling and (possibly
+ * unknown) meaning, per [mode]. BOTH speaks the characters first, then the
+ * meaning after a comma pause; an unknown meaning falls back to the literal.
+ */
+private fun shorthandAnswer(mode: SpokenAnswerMode, literal: String, meaning: String?): String =
+    when (mode) {
+        SpokenAnswerMode.LITERAL -> literal
+        SpokenAnswerMode.MEANING -> meaning ?: literal
+        SpokenAnswerMode.BOTH -> if (meaning == null) literal else "$literal, $meaning"
+    }
+
+/**
  * Prosign generator: emits a random prosign from [Morse.prosigns], with the prosign's
  * canonical joined Morse so the audio engine does not insert any gap between letters.
  *
  * Spoken answer is rendered according to [spokenMode]:
  *  - LITERAL -> e.g. "<AS>" speaks as "A S"
  *  - MEANING -> e.g. "<AS>" speaks as "wait"
+ *  - BOTH    -> e.g. "<AS>" speaks as "A S, wait"
  *
  * The global [PracticeConfig.natoSpokenAnswers] flag does NOT apply to prosigns;
- * they always use the [spokenMode] (which is always literal letter-by-letter).
+ * the literal spelling is always letter-by-letter.
  */
 class ProsignContentGenerator(
-    private val spokenMode: ProsignSpokenMode = ProsignSpokenMode.LITERAL,
+    private val spokenMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
     private val random: Random = Random.Default,
 ) {
     fun batch(count: Int): List<ContentItem> {
         val keys = Morse.prosigns.keys.toList()
         return List(count) {
             val key = keys.random(random)
-            val answer = when (spokenMode) {
-                ProsignSpokenMode.LITERAL -> Morse.literalFor(key)
-                ProsignSpokenMode.MEANING -> Morse.prosignMeanings[key] ?: Morse.literalFor(key)
-            }
             ContentItem(
                 text = "<$key>",
-                spokenAnswer = answer,
+                spokenAnswer = shorthandAnswer(
+                    spokenMode,
+                    literal = Morse.literalFor(key),
+                    meaning = Morse.prosignMeanings[key],
+                ),
                 morseOverride = Morse.prosigns[key],
             )
         }
@@ -56,22 +69,26 @@ class ProsignContentGenerator(
 
 /**
  * Q-code generator: each Q-code is a single practice item. The spoken answer
- * prefers the natural-language meaning when one is known (e.g. "QTH" ->
- * "your location"). When no meaning is mapped, it falls back to NATO
- * phonetics ([nato] = true) or the bare code itself ([nato] = false).
+ * follows [spokenMode]: the literal half is NATO-spelled ([nato] = true) or
+ * letter-by-letter ([nato] = false); the meaning half uses the
+ * natural-language meaning when one is known (e.g. "QTH" -> "your location")
+ * and falls back to the literal spelling otherwise.
  */
 class QCodeContentGenerator(
+    private val spokenMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
     private val random: Random = Random.Default,
 ) {
     fun batch(count: Int, nato: Boolean = true): List<ContentItem> {
         val spokenMap: Map<String, String> = rememberSpoken()
         return List(count) {
             val code = Morse.qCodes.random(random)
-            val answer = spokenMap[code]
-                ?: if (nato) Morse.natoFor(code) else code
             ContentItem(
                 text = code,
-                spokenAnswer = answer,
+                spokenAnswer = shorthandAnswer(
+                    spokenMode,
+                    literal = if (nato) Morse.natoFor(code) else Morse.literalFor(code),
+                    meaning = spokenMap[code],
+                ),
             )
         }
     }
@@ -111,19 +128,25 @@ class QCodeContentGenerator(
  * Abbreviation generator: common CW abbreviations (73, TU, WX...) from
  * [Morse.abbreviations]. Sent as ordinary spaced characters - unlike
  * prosigns nothing is joined, because that is how abbreviations are keyed
- * on the air. The spoken answer is the abbreviation's meaning, matching
- * the Q-code behavior.
+ * on the air. The spoken answer follows [spokenMode], matching the Q-code
+ * behavior: literal spelling (NATO or letter-by-letter per [nato]),
+ * meaning, or both.
  */
 class AbbreviationContentGenerator(
+    private val spokenMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
     private val random: Random = Random.Default,
 ) {
-    fun batch(count: Int): List<ContentItem> {
+    fun batch(count: Int, nato: Boolean = true): List<ContentItem> {
         val keys = Morse.abbreviations.keys.toList()
         return List(count) {
             val abbr = keys.random(random)
             ContentItem(
                 text = abbr,
-                spokenAnswer = Morse.abbreviations[abbr],
+                spokenAnswer = shorthandAnswer(
+                    spokenMode,
+                    literal = if (nato) Morse.natoFor(abbr) else Morse.literalFor(abbr),
+                    meaning = Morse.abbreviations[abbr],
+                ),
             )
         }
     }

@@ -6,13 +6,29 @@ package com.cwjitsu.app.practice
  */
 
 /**
- * How the spoken answer for a prosign is rendered.
+ * What the spoken answer says for shorthand items (prosigns, Q-codes,
+ * and abbreviations).
  */
-enum class ProsignSpokenMode {
-    /** Speak the literal letters, e.g. "A S" for <AS>. */
+enum class SpokenAnswerMode {
+    /** Speak the literal characters, e.g. "A S" for <AS>. */
     LITERAL,
     /** Speak the plain-English meaning, e.g. "wait" for <AS>. */
     MEANING,
+    /** Speak both, characters first: "A S, wait". */
+    BOTH;
+
+    val speaksLiteral: Boolean get() = this != MEANING
+    val speaksMeaning: Boolean get() = this != LITERAL
+
+    companion object {
+        /** Combine the two flags into a mode; null when both are off. */
+        fun of(literal: Boolean, meaning: Boolean): SpokenAnswerMode? = when {
+            literal && meaning -> BOTH
+            literal -> LITERAL
+            meaning -> MEANING
+            else -> null
+        }
+    }
 }
 
 /**
@@ -66,12 +82,13 @@ data class PracticeConfig(
     val noiseType: NoiseType = NoiseType.NONE,
     val noiseVolume: Float = 0.0f,
     val sloppyMode: SloppyMode = SloppyMode.OFF,
-    val prosignSpokenMode: ProsignSpokenMode = ProsignSpokenMode.LITERAL,
+    val shorthandSpokenMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
     /**
      * When true, characters and callsigns are spelled as NATO phonetics
      * ("alpha bravo one golf"). When false, each character is spoken
-     * individually (e.g. "A B 1 G W"). Prosigns and Q-codes keep their
-     * own conventions regardless of this flag.
+     * individually (e.g. "A B 1 G W"). For shorthand it only affects the
+     * character-spelling half of the answer for Q-codes and abbreviations;
+     * prosigns are always spelled letter-by-letter.
      */
     val natoSpokenAnswers: Boolean = true,
 ) {

@@ -94,7 +94,7 @@ import com.cwjitsu.app.practice.Morse
 import com.cwjitsu.app.practice.NewsSource
 import com.cwjitsu.app.practice.NewsSources
 import com.cwjitsu.app.practice.PracticeConfig
-import com.cwjitsu.app.practice.ProsignSpokenMode
+import com.cwjitsu.app.practice.SpokenAnswerMode
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
 import com.cwjitsu.app.ui.components.DragOnlyRangeSlider
@@ -336,7 +336,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         ContentMixer.build(
             enabledKinds = current.enabledKinds,
             words = words,
-            prosignMode = cfg.prosignSpokenMode,
+            shorthandMode = cfg.shorthandSpokenMode,
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
             textSource = current.textSource,
@@ -517,12 +517,12 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                 )
             }
 
-            // Per-category settings for the combined Prosigns & Q-codes card:
-            // choose which of the three to drill, plus the prosign
-            // spoken-answer style (only relevant while prosigns are on).
+            // Per-category settings for the combined Shorthand card:
+            // choose which of the three to drill, plus the spoken-answer
+            // style shared by all of them.
             if (ContentKind.PROSIGNS_QCODES in effectiveConfig.enabledKinds) {
                 Text(
-                    "Prosigns & Q-codes",
+                    "Shorthand",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -556,28 +556,39 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     onCheckedChange = { setAbbreviationsEnabled(it) },
                 )
 
-                // Prosign spoken-answer style, shown only while prosigns are on.
-                if (effectiveConfig.prosignsEnabled) {
+                // Spoken-answer style, shared by prosigns, Q-codes, and
+                // abbreviations. Both chips can be on at once to hear the
+                // characters and then the meaning; the last one on cannot
+                // be turned off (SpokenAnswerMode.of returns null).
+                if (effectiveConfig.prosignsEnabled ||
+                    effectiveConfig.qcodesEnabled ||
+                    effectiveConfig.abbreviationsEnabled
+                ) {
                     Text(
-                        "Prosign spoken answer",
+                        "Spoken answer",
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(top = 4.dp),
                     )
+                    val mode = config.shorthandSpokenMode
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = config.prosignSpokenMode == ProsignSpokenMode.LITERAL,
+                            selected = mode.speaksLiteral,
                             onClick = {
-                                scope.launch {
-                                    app.settings.updateConfig { it.copy(prosignSpokenMode = ProsignSpokenMode.LITERAL) }
+                                SpokenAnswerMode.of(!mode.speaksLiteral, mode.speaksMeaning)?.let { new ->
+                                    scope.launch {
+                                        app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
+                                    }
                                 }
                             },
-                            label = { Text("Literal (\"A S\")") },
+                            label = { Text("Characters (\"A S\")") },
                         )
                         FilterChip(
-                            selected = config.prosignSpokenMode == ProsignSpokenMode.MEANING,
+                            selected = mode.speaksMeaning,
                             onClick = {
-                                scope.launch {
-                                    app.settings.updateConfig { it.copy(prosignSpokenMode = ProsignSpokenMode.MEANING) }
+                                SpokenAnswerMode.of(mode.speaksLiteral, !mode.speaksMeaning)?.let { new ->
+                                    scope.launch {
+                                        app.settings.updateConfig { it.copy(shorthandSpokenMode = new) }
+                                    }
                                 }
                             },
                             label = { Text("Meaning (\"wait\")") },
@@ -1467,7 +1478,7 @@ private fun CountryManagerDialog(
 
 private fun ContentKind.label(): String = when (this) {
     ContentKind.CHARACTERS -> "Characters"
-    ContentKind.PROSIGNS_QCODES -> "Prosigns & Q-codes"
+    ContentKind.PROSIGNS_QCODES -> "Shorthand"
     ContentKind.WORDS -> "Words"
     ContentKind.TEXT -> "Text"
     ContentKind.CALLSIGNS -> "Call Signs"
@@ -1485,7 +1496,7 @@ private fun ContentKind.icon(): ImageVector = when (this) {
 
 private fun ContentKind.subtitle(): String = when (this) {
     ContentKind.CHARACTERS -> "A-Z, 0-9"
-    ContentKind.PROSIGNS_QCODES -> "AR, QSL..."
+    ContentKind.PROSIGNS_QCODES -> "AR, QSL, 73..."
     ContentKind.WORDS -> "English"
     ContentKind.TEXT -> "Your text"
     ContentKind.CALLSIGNS -> "By country"
