@@ -28,6 +28,9 @@ object ContentMixer {
         callsignMinLength: Int = MixedConfig.CALLSIGN_LENGTH_RANGE.first,
         callsignMaxLength: Int = MixedConfig.CALLSIGN_LENGTH_RANGE.last,
         characterPool: Set<Char> = MixedConfig.DEFAULT_CHARACTER_SET,
+        characterGroupsEnabled: Boolean = false,
+        characterGroupMin: Int = MixedConfig.CHARACTER_GROUP_RANGE.first,
+        characterGroupMax: Int = MixedConfig.CHARACTER_GROUP_RANGE.last,
         prosignsEnabled: Boolean = true,
         qcodesEnabled: Boolean = true,
         abbreviationsEnabled: Boolean = true,
@@ -46,7 +49,15 @@ object ContentMixer {
                     // Morse order. An empty selection emits nothing.
                     val pool = Morse.characters.keys.filter { it in characterPool }
                     if (pool.isNotEmpty()) {
-                        out.addAll(CharacterContentGenerator(pool = pool).batch(1, nato))
+                        val gen = CharacterContentGenerator(pool = pool)
+                        if (characterGroupsEnabled) {
+                            // One multi-character group per round, sent as a
+                            // single item so the spoken answer comes after the
+                            // whole group, not after each character.
+                            out.add(gen.group(characterGroupMin, characterGroupMax, nato))
+                        } else {
+                            out.addAll(gen.batch(1, nato))
+                        }
                     }
                 }
                 ContentKind.PROSIGNS_QCODES -> {

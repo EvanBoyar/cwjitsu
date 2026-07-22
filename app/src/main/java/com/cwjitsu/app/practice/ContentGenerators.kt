@@ -20,6 +20,24 @@ class CharacterContentGenerator(
                     spokenAnswer = Morse.spokenName(ch, nato),
                 )
             }
+
+    /**
+     * A single group of [minSize]..[maxSize] characters drawn from the pool,
+     * emitted as ONE [ContentItem] so the group is keyed continuously (normal
+     * inter-character gaps) and the orchestrator speaks the answer once, after
+     * the whole group has been sent, rather than after each character. The
+     * spoken answer spells the whole group (NATO or letter-by-letter per [nato]).
+     */
+    fun group(minSize: Int, maxSize: Int, nato: Boolean = true): ContentItem {
+        val lo = minSize.coerceAtLeast(1)
+        val hi = maxSize.coerceAtLeast(lo)
+        val size = if (lo >= hi) lo else random.nextInt(lo, hi + 1)
+        val text = List(size) { pool.random(random) }.joinToString("")
+        return ContentItem(
+            text = text,
+            spokenAnswer = if (nato) Morse.natoFor(text) else Morse.literalFor(text),
+        )
+    }
 }
 
 /**

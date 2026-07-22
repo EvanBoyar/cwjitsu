@@ -72,6 +72,15 @@ data class MixedConfig(
     val callsignMinLength: Int = CALLSIGN_LENGTH_RANGE.first,
     val callsignMaxLength: Int = CALLSIGN_LENGTH_RANGE.last,
     val characterSet: Set<Char> = DEFAULT_CHARACTER_SET,
+    // When true, the Characters category sends a random-length GROUP of
+    // characters as a single item (e.g. "KRQ5T") instead of one character at
+    // a time. The group is keyed continuously with normal inter-character
+    // gaps and gets a single spoken answer after the whole group is sent.
+    val characterGroupsEnabled: Boolean = false,
+    // Inclusive bounds on the random group size, within [CHARACTER_GROUP_RANGE].
+    // Only consulted when [characterGroupsEnabled] is true.
+    val characterGroupMin: Int = 3,
+    val characterGroupMax: Int = 5,
     // Sub-toggles for the combined Prosigns & Q-codes category. All default
     // on so selecting the category drills everything, matching the old
     // behavior of enabling the two separate categories.
@@ -102,6 +111,12 @@ data class MixedConfig(
          * longest is a 3-char prefix (e.g. KH6) + digit + 3 letters (7).
          */
         val CALLSIGN_LENGTH_RANGE: IntRange = 2..7
+
+        /**
+         * Allowed sizes for a character group when the Characters category is
+         * in "groups" mode: 2 to 8 characters per group.
+         */
+        val CHARACTER_GROUP_RANGE: IntRange = 2..8
 
         /**
          * Which characters the Characters category draws from by default:

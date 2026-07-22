@@ -216,6 +216,22 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    fun setCharacterGroupsEnabled(enabled: Boolean) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(characterGroupsEnabled = enabled) }
+        }
+    }
+
+    // Both bounds arrive together from the range slider, whose thumbs can't
+    // cross, so min <= max is guaranteed by construction.
+    fun setCharacterGroupRange(min: Int, max: Int) {
+        scope.launch {
+            app.settings.updateMixedConfig {
+                it.copy(characterGroupMin = min, characterGroupMax = max)
+            }
+        }
+    }
+
     // The shared refresh rules (enabled-check, all-feeds download, rate
     // limit) live in CWJitsuApp.refreshNewsIfEnabled. force=true is for the
     // explicit Refresh button and newly-added feeds; automatic triggers
@@ -347,6 +363,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             callsignMinLength = current.callsignMinLength,
             callsignMaxLength = current.callsignMaxLength,
             characterPool = current.characterSet,
+            characterGroupsEnabled = current.characterGroupsEnabled,
+            characterGroupMin = current.characterGroupMin,
+            characterGroupMax = current.characterGroupMax,
             prosignsEnabled = current.prosignsEnabled,
             qcodesEnabled = current.qcodesEnabled,
             abbreviationsEnabled = current.abbreviationsEnabled,
@@ -515,6 +534,27 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     onSelectGroup = { group -> updateCharacters { it + group } },
                     onClearGroup = { group -> updateCharacters { it - group } },
                 )
+
+                // Groups: send several characters at once as a single item.
+                // The spoken answer (if enabled) comes after the whole group.
+                ToggleRow(
+                    label = "Send in groups",
+                    checked = effectiveConfig.characterGroupsEnabled,
+                    onCheckedChange = { setCharacterGroupsEnabled(it) },
+                )
+                Text(
+                    "Send a random-length group of characters at once instead of " +
+                        "one at a time. The spoken answer comes after the whole group.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                if (effectiveConfig.characterGroupsEnabled) {
+                    CharacterGroupRangeSlider(
+                        min = effectiveConfig.characterGroupMin,
+                        max = effectiveConfig.characterGroupMax,
+                        onChange = { min, max -> setCharacterGroupRange(min, max) },
+                    )
+                }
             }
 
             // Per-category settings for the combined Shorthand card:
@@ -801,6 +841,46 @@ private fun CallsignLengthRangeSlider(
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 "Callsign length",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (min == max) "$min" else "$min–$max",
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        // Drag-only on purpose: the standard RangeSlider moves on a bare
+        // track press, so scrolling the panel used to change the bounds.
+        DragOnlyRangeSlider(
+            value = min.toFloat()..max.toFloat(),
+            onValueChange = { range ->
+                onChange(
+                    range.start.roundToInt().coerceIn(bounds.first, bounds.last),
+                    range.endInclusive.roundToInt().coerceIn(bounds.first, bounds.last),
+                )
+            },
+            valueRange = bounds.first.toFloat()..bounds.last.toFloat(),
+            steps = bounds.last - bounds.first - 1,
+        )
+    }
+}
+
+/**
+ * Range slider bounding the size of a character group, over
+ * [MixedConfig.CHARACTER_GROUP_RANGE]. Discrete steps, one per size; the
+ * thumbs can't cross, so min <= max holds by construction.
+ */
+@Composable
+private fun CharacterGroupRangeSlider(
+    min: Int,
+    max: Int,
+    onChange: (Int, Int) -> Unit,
+) {
+    val bounds = MixedConfig.CHARACTER_GROUP_RANGE
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Group size",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )

@@ -247,6 +247,10 @@ class SettingsRepository(private val context: Context) {
             .filter { it in config.characterSet }
             .joinToString("")
         o.put("characterSet", chars)
+        // Groups mode for the Characters category + its size bounds.
+        o.put("characterGroupsEnabled", config.characterGroupsEnabled)
+        o.put("characterGroupMin", config.characterGroupMin)
+        o.put("characterGroupMax", config.characterGroupMax)
         // Sub-toggles for the combined Prosigns & Q-codes category.
         o.put("prosignsEnabled", config.prosignsEnabled)
         o.put("qcodesEnabled", config.qcodesEnabled)
@@ -314,6 +318,15 @@ class SettingsRepository(private val context: Context) {
         } else {
             MixedConfig.DEFAULT_CHARACTER_SET
         }
+        // Character groups: absent keys (older configs) fall back to the
+        // defaults - groups off, sizes from the shared range. Values are
+        // coerced so a bad save can never produce min > max.
+        val groupRange = MixedConfig.CHARACTER_GROUP_RANGE
+        val characterGroupsEnabled = o.optBoolean("characterGroupsEnabled", false)
+        val characterGroupMin = o.optInt("characterGroupMin", MixedConfig().characterGroupMin)
+            .coerceIn(groupRange.first, groupRange.last)
+        val characterGroupMax = o.optInt("characterGroupMax", MixedConfig().characterGroupMax)
+            .coerceIn(characterGroupMin, groupRange.last)
         // Prosigns/Q-codes sub-toggles. When the new keys are absent, seed
         // from the legacy category names if present (so a user who had only
         // Q-codes keeps only Q-codes), otherwise default both on.
@@ -378,6 +391,9 @@ class SettingsRepository(private val context: Context) {
             callsignMinLength = callsignMinLength,
             callsignMaxLength = callsignMaxLength,
             characterSet = characterSet,
+            characterGroupsEnabled = characterGroupsEnabled,
+            characterGroupMin = characterGroupMin,
+            characterGroupMax = characterGroupMax,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,
             abbreviationsEnabled = abbreviationsEnabled,
