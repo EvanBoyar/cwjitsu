@@ -49,7 +49,7 @@ class CWJitsuApp : Application() {
         // first answer to a still-loading engine.
         ttsManager.init()
 
-        // If the user practises News, warm the headline cache in the background
+        // If the user practices News, warm the headline cache in the background
         // on launch (typically on Wi-Fi before heading underground). The
         // NewsRepository already loaded any saved cache from disk, so this only
         // refreshes it; when offline the refresh fails fast and the cache stays.
@@ -70,7 +70,7 @@ class CWJitsuApp : Application() {
      * Refresh the news cache if the News category is enabled. The single
      * entry point for every refresh trigger (app launch, the News panel,
      * the daily worker), so the shared rules live in one place: only spend
-     * the user's data when they actually practise news, and download EVERY
+     * the user's data when they actually practice news, and download EVERY
      * feed - not just the enabled ones - so toggling a source on later
      * (possibly offline by then) already has its headlines cached.
      * Un-forced calls are additionally rate-limited by the repository.

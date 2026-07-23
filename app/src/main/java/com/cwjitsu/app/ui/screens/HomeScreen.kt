@@ -507,7 +507,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Choose what to practise",
+                "Choose what to practice",
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
@@ -1045,7 +1045,7 @@ private fun TextSourceField(
             localText = newValue
             commitText(newValue)
         },
-        placeholder = { Text("Type or paste text to practise") },
+        placeholder = { Text("Type or paste text to practice") },
         minLines = 2,
         maxLines = 4,
         modifier = Modifier

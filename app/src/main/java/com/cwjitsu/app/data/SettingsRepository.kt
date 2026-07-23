@@ -221,7 +221,7 @@ class SettingsRepository(private val context: Context) {
     /**
      * Atomic read-modify-write of the saved [MixedConfig]. The [transform]
      * runs inside the [dataStore.edit] transaction, so concurrent callers
-     * serialise correctly and never observe each other's stale snapshots.
+     * serialize correctly and never observe each other's stale snapshots.
      * Use this for every chip toggle so that a fast double-tap on two
      * different chips composes into the final state the user actually
      * requested, and so that an empty selection (e.g. deselecting the

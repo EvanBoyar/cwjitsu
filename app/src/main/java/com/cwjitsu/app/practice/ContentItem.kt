@@ -1,7 +1,7 @@
 package com.cwjitsu.app.practice
 
 /**
- * What kind of content the user is practising on a given run.
+ * What kind of content the user is practicing on a given run.
  */
 enum class ContentKind {
     CHARACTERS,

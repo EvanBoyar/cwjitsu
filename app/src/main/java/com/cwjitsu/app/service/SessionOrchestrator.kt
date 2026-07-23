@@ -206,7 +206,7 @@ class SessionOrchestrator(
                 _state.value = RunnerState.STOPPED
             } catch (e: CancellationException) {
                 _state.value = RunnerState.STOPPED
-                Log.d(TAG, "start CANCELLED")
+                Log.d(TAG, "start CANCELED")
                 throw e
             } catch (t: Throwable) {
                 Log.e(TAG, "start FATAL uncaught", t)
@@ -377,7 +377,7 @@ class SessionOrchestrator(
         // beat to register the change before the code starts. The now-playing
         // label has already flipped above; this cue makes the switch audible
         // too - the courtesy pip (when enabled) marks it, then a short settle
-        // pause. A fresh navigation landing during the cue is honoured at the
+        // pause. A fresh navigation landing during the cue is honored at the
         // checks below.
         if (navCue) {
             if (config.courtesyToneEnabled) {
@@ -386,7 +386,7 @@ class SessionOrchestrator(
             }
             delay(NAV_CHANGE_DELAY_MS)
             if (navRequested) return
-            // Honour a pause that landed during the cue before the code starts.
+            // Honor a pause that landed during the cue before the code starts.
             awaitResume()
         }
 

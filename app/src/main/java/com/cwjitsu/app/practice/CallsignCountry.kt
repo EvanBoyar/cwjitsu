@@ -8,7 +8,7 @@ package com.cwjitsu.app.practice
  *   - DIGITS is exactly one digit (US/Canada/UK conventions)
  *   - SUFFIX is a random sequence of 1..3 uppercase letters
  *
- * [region] is the broad geographic grouping used to organise the
+ * [region] is the broad geographic grouping used to organize the
  * country-picker dialog (e.g. "Europe", "Asia", "Oceania"). It is not
  * part of the callsign itself; it only drives the UI.
  *
@@ -138,7 +138,7 @@ object CallsignRegistry {
 
         // -------- Europe --------
         // M-series (post-1996) is now the biggest UK block, G the large
-        // legacy population; 2E is intermediate licence, MM/MW are the
+        // legacy population; 2E is intermediate license, MM/MW are the
         // Scottish/Welsh regional variants (~10% of UK population).
         cw("United Kingdom", "Europe",
             "M" to 40, "G" to 35, "2E" to 12, "MM" to 4, "MW" to 3),
@@ -170,7 +170,7 @@ object CallsignRegistry {
             "UR" to 15, "UT" to 12, "US" to 10, "UX" to 4, "UY" to 4,
             "UW" to 3, "UU" to 2, "UV" to 2, "UZ" to 2,
             "EM" to 1, "EN" to 1, "EO" to 1),
-        // PA full licence, PD/PE novice+intermediate, PI clubs/repeaters.
+        // PA full license, PD/PE novice+intermediate, PI clubs/repeaters.
         cw("Netherlands", "Europe",
             "PA" to 25, "PD" to 8, "PE" to 8, "PB" to 3, "PC" to 3,
             "PG" to 2, "PH" to 2, "PF" to 1, "PI" to 1),

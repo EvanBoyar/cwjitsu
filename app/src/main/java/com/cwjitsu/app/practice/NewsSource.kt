@@ -1,7 +1,7 @@
 package com.cwjitsu.app.practice
 
 /**
- * A news feed the user can practise with. Built-in sources ship with the app;
+ * A news feed the user can practice with. Built-in sources ship with the app;
  * custom sources are RSS/Atom URLs the user pastes in.
  *
  * [id] is stable and used as the persistence key (built-ins) or is derived

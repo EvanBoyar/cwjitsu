@@ -85,7 +85,7 @@ fun ConfigPanel(
                 "${(config.farnsworthWpm ?: 5).coerceAtMost(config.characterWpm)}"
             } else "off",
             onValueChange = { v -> onUpdate { it.copy(farnsworthWpm = v.toInt()) } },
-            // Greyed out while Farnsworth is off so the user can still see
+            // Grayed out while Farnsworth is off so the user can still see
             // the layout but cannot accidentally change a disabled value.
             enabled = farnsOn,
         )
@@ -175,8 +175,8 @@ fun ConfigPanel(
         // Shown as a repeat count: 0 means "sent once, not repeated". The
         // stored `repetitions` is the play count (always >= 1), so the slider
         // maps display = plays - 1 and stores value + 1. This keeps existing
-        // behaviour unchanged while letting the setting bottom out at 0. At 0
-        // it greys out (like Farnsworth) to signal "no repetition", but stays
+        // behavior unchanged while letting the setting bottom out at 0. At 0
+        // it grays out (like Farnsworth) to signal "no repetition", but stays
         // draggable so the user can turn it back up.
         LabeledSlider(
             label = "Repetitions",
@@ -213,7 +213,7 @@ fun ConfigPanel(
             onCheckedChange = { on -> onUpdate { it.copy(answerEnabled = on) } },
         )
 
-        // Everything below follows the master toggle and greys out with it:
+        // Everything below follows the master toggle and grays out with it:
         // how the answer is pronounced, how loud, how soon, and whether the
         // code replays afterwards.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -331,17 +331,17 @@ private fun LabeledSlider(
     valueLabel: String,
     onValueChange: (Float) -> Unit,
     enabled: Boolean = true,
-    // Greyed appearance while STILL interactive (unlike [enabled] = false).
+    // Grayed appearance while STILL interactive (unlike [enabled] = false).
     // Used to signal an "off" value the user can still drag away from, e.g.
     // Repetitions at 0.
     dimmed: Boolean = false,
 ) {
-    val greyed = !enabled || dimmed
-    val labelColor = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+    val grayed = !enabled || dimmed
+    val labelColor = if (grayed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                      else MaterialTheme.colorScheme.onSurface
-    val thumb = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+    val thumb = if (grayed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                 else MaterialTheme.colorScheme.primary
-    val track = if (greyed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+    val track = if (grayed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
                 else MaterialTheme.colorScheme.primary
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth()) {
