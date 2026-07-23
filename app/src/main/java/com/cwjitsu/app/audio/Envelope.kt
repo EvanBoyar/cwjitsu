@@ -30,4 +30,31 @@ class Envelope(private val sampleRate: Int) {
         val phase = pos.toDouble() / rampSamples.toDouble()
         return ((1.0 - cos(phase * PI)) / 2.0).toFloat()
     }
+
+    /**
+     * Gain for a standalone fade-OUT ramp [fadeLen] samples long: 1 at
+     * [pos] 0, easing down the same cosine curve to 0 at [pos] >= [fadeLen].
+     * Used to declick a tone that is cut off mid-element (e.g. Skip/Previous/
+     * Restart), which otherwise pops because the amplitude drops to zero
+     * instantaneously instead of through the normal per-element release ramp.
+     */
+    fun fadeOutGain(pos: Int, fadeLen: Int): Float {
+        if (fadeLen <= 0 || pos >= fadeLen) return 0f
+        if (pos <= 0) return 1f
+        val phase = pos.toDouble() / fadeLen.toDouble()
+        return ((1.0 + cos(phase * PI)) / 2.0).toFloat()
+    }
+
+    /**
+     * Gain for a standalone fade-IN ramp [fadeLen] samples long: 0 at
+     * [pos] 0, easing up the cosine curve to 1 at [pos] >= [fadeLen]. Used
+     * to declick a tone RESUMED mid-element (pause froze the sine at a
+     * nonzero amplitude, so continuing it would snap back in from silence).
+     */
+    fun fadeInGain(pos: Int, fadeLen: Int): Float {
+        if (fadeLen <= 0 || pos >= fadeLen) return 1f
+        if (pos <= 0) return 0f
+        val phase = pos.toDouble() / fadeLen.toDouble()
+        return ((1.0 - cos(phase * PI)) / 2.0).toFloat()
+    }
 }

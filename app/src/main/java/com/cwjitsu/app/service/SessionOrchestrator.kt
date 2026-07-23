@@ -1,5 +1,6 @@
 package com.cwjitsu.app.service
 
+import android.os.SystemClock
 import android.util.Log
 import com.cwjitsu.app.audio.CwAudioEngine
 import com.cwjitsu.app.audio.Schedule
@@ -47,6 +48,18 @@ class SessionOrchestrator(
         // is trimmed down to HISTORY_KEEP items behind the position.
         private const val HISTORY_TRIM_AT = 100
         private const val HISTORY_KEEP = 50
+
+        // After Prev/Next/Restart, pause briefly before the new item's code
+        // starts so the listener registers that we moved to something new
+        // (the now-playing label has already flipped) rather than the change
+        // being masked by the code starting instantly.
+        private const val NAV_CHANGE_DELAY_MS = 700L
+
+        // A media/Bluetooth "previous" button press restarts the current item
+        // by default; a second press within this window (chaining as long as
+        // presses keep coming) instead steps back to the earlier item. See
+        // [mediaPrevious].
+        private const val MEDIA_PREVIOUS_CHAIN_WINDOW_MS = 5_000L
     }
 
     enum class RunnerState { IDLE, RUNNING, STOPPED }
@@ -82,6 +95,24 @@ class SessionOrchestrator(
     private var skipRequested = false
     @Volatile
     private var previousRequested = false
+    // Set by [restart] to replay the current item from the top without leaving
+    // it. Consumed by the playback loop exactly like the other two, but leaves
+    // the queue position unchanged.
+    @Volatile
+    private var restartRequested = false
+
+    // True while any of the three navigation requests is pending. The playItem
+    // checkpoints and the pre-play cue all bail/branch on "did the user just
+    // navigate", regardless of which direction.
+    private val navRequested: Boolean
+        get() = skipRequested || previousRequested || restartRequested
+
+    // Uptime (ms) of the last media/Bluetooth "previous" press, or 0 if none
+    // recently. Drives the restart-then-step-back chaining in [mediaPrevious].
+    // elapsedRealtime is monotonic and always > 0 after boot, so 0 is a safe
+    // "never pressed" sentinel.
+    @Volatile
+    private var lastMediaPreviousAt = 0L
 
     private var job: Job? = null
 
@@ -98,6 +129,8 @@ class SessionOrchestrator(
         _paused.value = false
         skipRequested = false
         previousRequested = false
+        restartRequested = false
+        lastMediaPreviousAt = 0L
         job = scope.launch(Dispatchers.Default) {
             _state.value = RunnerState.RUNNING
             // Fresh session starts with a blank now-playing window.
@@ -111,6 +144,11 @@ class SessionOrchestrator(
             // the position runs off the end.
             val queue = mutableListOf<ContentItem>()
             var position = 0
+            // Whether the item we're about to play was reached by a user
+            // Prev/Next/Restart (vs. the natural end of the previous item).
+            // Drives the short "we changed" cue at the top of playItem. Starts
+            // false: the very first item of a session gets no cue.
+            var navCue = false
             try {
             while (isActive) {
                 // Fresh config every round so edits apply on the next send.
@@ -144,17 +182,26 @@ class SessionOrchestrator(
                     item = queue[position],
                     previousItem = queue.getOrNull(position - 1),
                     config = config,
+                    navCue = navCue,
                 )
-                if (previousRequested) {
-                    previousRequested = false
-                    skipRequested = false
-                    // At the head of the (trimmed) history, Previous simply
-                    // replays the current item.
-                    position = (position - 1).coerceAtLeast(0)
-                } else {
-                    skipRequested = false
-                    position++
+                // Remember whether the advance below was user-driven so the
+                // next item opens with the "we changed" cue. Read before the
+                // flags are cleared.
+                navCue = navRequested
+                when {
+                    previousRequested -> {
+                        // At the head of the (trimmed) history, Previous simply
+                        // replays the current item.
+                        position = (position - 1).coerceAtLeast(0)
+                    }
+                    // Restart: replay the current item, position unchanged.
+                    restartRequested -> Unit
+                    // Skip or the natural end of an item both advance by one.
+                    else -> position++
                 }
+                skipRequested = false
+                previousRequested = false
+                restartRequested = false
             }
                 _state.value = RunnerState.STOPPED
             } catch (e: CancellationException) {
@@ -175,6 +222,8 @@ class SessionOrchestrator(
         _paused.value = false
         skipRequested = false
         previousRequested = false
+        restartRequested = false
+        lastMediaPreviousAt = 0L
         _state.value = RunnerState.STOPPED
     }
 
@@ -212,6 +261,42 @@ class SessionOrchestrator(
         _paused.value = false
         engine.abort()
         tts.stop()
+    }
+
+    /**
+     * Restart the current item from the top, without leaving it. Aborts the
+     * in-flight tone and any spoken answer the same way [skip]/[previous] do;
+     * the playback loop sees [restartRequested] and replays the same queue
+     * position. If the session was paused, restarting also resumes it. No-op
+     * unless a session is RUNNING.
+     */
+    fun restart() {
+        if (_state.value != RunnerState.RUNNING) return
+        Log.d(TAG, "restart")
+        restartRequested = true
+        _paused.value = false
+        engine.abort()
+        tts.stop()
+    }
+
+    /**
+     * Handle a media/Bluetooth "previous" transport press. Unlike the in-app
+     * Previous button (which is always a true step-back, paired with a
+     * dedicated Restart button), a headset's single Previous button is
+     * overloaded: the first press [restart]s the current item, and only a
+     * follow-up press within [MEDIA_PREVIOUS_CHAIN_WINDOW_MS] steps back to the
+     * earlier item. The window slides with each press, so hammering Previous
+     * restarts once and then walks back one item per press; letting it go quiet
+     * for the window resets, so the next lone press restarts again.
+     */
+    fun mediaPrevious() {
+        if (_state.value != RunnerState.RUNNING) return
+        val now = SystemClock.elapsedRealtime()
+        val chained = lastMediaPreviousAt != 0L &&
+            (now - lastMediaPreviousAt) <= MEDIA_PREVIOUS_CHAIN_WINDOW_MS
+        lastMediaPreviousAt = now
+        Log.d(TAG, "mediaPrevious chained=$chained")
+        if (chained) previous() else restart()
     }
 
     /**
@@ -253,12 +338,14 @@ class SessionOrchestrator(
      * replay, and the courtesy tone. Returns early (without clearing the
      * flags - the caller's queue loop does that) when Skip or Previous
      * aborts the item mid-flight. [previousItem] is only used for the
-     * rolling now-playing window.
+     * rolling now-playing window. When [navCue] is true this item was reached
+     * by a user Prev/Next/Restart, so it opens with a short "we changed" cue.
      */
     private suspend fun playItem(
         item: ContentItem,
         previousItem: ContentItem?,
         config: PracticeConfig,
+        navCue: Boolean,
     ) {
         val builder = ScheduleBuilder(engine.sampleRate)
         val reps = config.repetitions.coerceAtLeast(1)
@@ -286,13 +373,30 @@ class SessionOrchestrator(
             current = item,
         )
 
+        // When we arrived here by a Prev/Next/Restart, give the listener a
+        // beat to register the change before the code starts. The now-playing
+        // label has already flipped above; this cue makes the switch audible
+        // too - the courtesy pip (when enabled) marks it, then a short settle
+        // pause. A fresh navigation landing during the cue is honoured at the
+        // checks below.
+        if (navCue) {
+            if (config.courtesyToneEnabled) {
+                playCourtesyTone(config)
+                if (navRequested) return
+            }
+            delay(NAV_CHANGE_DELAY_MS)
+            if (navRequested) return
+            // Honour a pause that landed during the cue before the code starts.
+            awaitResume()
+        }
+
         engine.setSchedule(schedule)
         engine.play()
         waitForAudioToFinish()
 
-        // Skip/Previous pressed during the tone: engine.abort() unblocked the
-        // wait above; bail out now (no answer, no courtesy).
-        if (skipRequested || previousRequested) return
+        // Skip/Previous/Restart pressed during the tone: engine.abort()
+        // unblocked the wait above; bail out now (no answer, no courtesy).
+        if (navRequested) return
 
         delay(config.postSendPauseMs)
 
@@ -342,8 +446,8 @@ class SessionOrchestrator(
             }
         }
 
-        // Skip/Previous pressed during the pause/answer: bail without the pip.
-        if (skipRequested || previousRequested) return
+        // Skip/Previous/Restart pressed during the pause/answer: bail w/o pip.
+        if (navRequested) return
 
         // Courtesy tone: a short pip played after EACH item (once its
         // code and spoken answer have finished), like a real repeater's
@@ -382,7 +486,7 @@ class SessionOrchestrator(
             // end-of-item sequence, and when answers are disabled the setting
             // would otherwise be dead weight - here it still shapes the gap
             // between items.
-            if (skipRequested || previousRequested) return
+            if (navRequested) return
             awaitResume()
             delay(config.answerDelayMs)
         }

@@ -49,8 +49,9 @@ import kotlinx.coroutines.launch
  * Previous/Next transport buttons don't touch the carrier at all: the
  * session is built on a [ForwardingPlayer] wrapper that force-advertises
  * the seek-to-previous/next commands (so the notification and lock screen
- * show the buttons) and forwards them straight to the orchestrator's
- * previous()/skip().
+ * show the buttons) and forwards them to the orchestrator - Next to skip(),
+ * Previous to mediaPrevious() (restart on the first press, step back on a
+ * quick follow-up).
  */
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -117,8 +118,12 @@ class PlaybackService : MediaSessionService() {
                     else -> super.isCommandAvailable(command)
                 }
 
-            override fun seekToPrevious() = app.orchestrator.previous()
-            override fun seekToPreviousMediaItem() = app.orchestrator.previous()
+            // A headset's single Previous button is overloaded: the first
+            // press restarts the current item, a quick follow-up steps back.
+            // mediaPrevious() encodes that timing (unlike the in-app Previous
+            // button, which is always a true step-back).
+            override fun seekToPrevious() = app.orchestrator.mediaPrevious()
+            override fun seekToPreviousMediaItem() = app.orchestrator.mediaPrevious()
             override fun seekToNext() = app.orchestrator.skip()
             override fun seekToNextMediaItem() = app.orchestrator.skip()
         }

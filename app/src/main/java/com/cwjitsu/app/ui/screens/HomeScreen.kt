@@ -473,6 +473,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     },
                     onStop = { orchestrator.stop() },
                     onPrevious = { orchestrator.previous() },
+                    onRestart = { orchestrator.restart() },
                     onNext = { orchestrator.skip() },
                 )
             }
