@@ -54,6 +54,10 @@ class NewsRepository(private val context: Context) {
     companion object {
         private const val TAG = "CWJitsu/News"
         private const val CACHE_FILE = "news_cache.json"
+        // Shuffle-bag progress lives in its own small file, separate from the
+        // (up to TOTAL_LIMIT) headline cache, so it can be rewritten on every
+        // draw without rewriting the whole headline list each time.
+        private const val BAG_FILE = "news_bag.json"
         private const val PER_FEED_LIMIT = 40
         private const val TOTAL_LIMIT = 500
         private const val CONNECT_TIMEOUT_MS = 8000
@@ -64,12 +68,6 @@ class NewsRepository(private val context: Context) {
         // appears; without a floor, hopping between screens re-downloads
         // every feed each time (data + battery for identical headlines).
         private const val MIN_REFRESH_INTERVAL_MS = 10 * 60_000L
-
-        // Shuffle-bag progress is persisted at most this often (plus on
-        // every merge). Persisting on every single draw meant a full-cache
-        // JSON write to flash every few seconds during a news session; at
-        // worst this floor loses a few draws of "already played" state.
-        private const val BAG_PERSIST_INTERVAL_MS = 30_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -81,7 +79,6 @@ class NewsRepository(private val context: Context) {
     private val playedIds = mutableSetOf<String>()
     private var lastId: String? = null
     private var updatedAtMillis: Long? = null
-    private var lastBagPersistMillis = 0L
 
     private val _status = MutableStateFlow(NewsStatus())
     val status: StateFlow<NewsStatus> = _status
@@ -116,13 +113,12 @@ class NewsRepository(private val context: Context) {
         val pick = candidates.random(random)
         playedIds.add(pick.id)
         lastId = pick.id
-        // Persist bag progress at most every BAG_PERSIST_INTERVAL_MS, not on
-        // every draw - see the constant for why.
-        val now = System.currentTimeMillis()
-        if (now - lastBagPersistMillis >= BAG_PERSIST_INTERVAL_MS) {
-            lastBagPersistMillis = now
-            scope.launch { persist() }
-        }
+        // Persist bag progress on every draw. This is a small, dedicated file
+        // (playedIds + lastId only), not the full headline cache, so the write
+        // is cheap - and without it, a session's most recent draws are lost
+        // when the process is reclaimed after playback stops, causing already-
+        // heard headlines to replay on the next launch.
+        scope.launch { persistBag() }
         pick
     }
 
@@ -183,7 +179,10 @@ class NewsRepository(private val context: Context) {
             return@withContext
         }
         merge(results, knownIds = feeds.mapTo(HashSet()) { it.id })
-        persist()
+        // merge() rewrites the pool and prunes bag progress for aged-out
+        // headlines, so both files need writing.
+        persistCache()
+        persistBag()
         val failed = results.filter { it.second.isEmpty() }.map { it.first.name }
         setStatus(
             message = if (failed.isEmpty()) null
@@ -340,9 +339,20 @@ class NewsRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Flush shuffle-bag progress to disk now. Called when a session stops or
+     * the app is backgrounded so the last few draws survive the process being
+     * reclaimed. Draws already persist the bag individually; this is a cheap
+     * belt-and-suspenders write for the moment before a likely teardown.
+     */
+    fun flushBag() {
+        scope.launch { persistBag() }
+    }
+
     // ---- Persistence -------------------------------------------------------
 
     private fun cacheFile(): File = File(context.filesDir, CACHE_FILE)
+    private fun bagFile(): File = File(context.filesDir, BAG_FILE)
 
     private suspend fun loadFromDisk() = withContext(Dispatchers.IO) {
         val file = cacheFile()
@@ -369,19 +379,25 @@ class NewsRepository(private val context: Context) {
                 }
                 Headline(id = id, title = title, sourceId = sourceId, sourceName = name)
             }
-            val played = o.optJSONArray("playedIds") ?: JSONArray()
+            // Bag state now lives in its own file; fall back to the legacy
+            // in-cache fields for caches written before the split.
+            val bag = runCatching {
+                bagFile().takeIf { it.exists() }?.let { JSONObject(it.readText()) }
+            }.getOrNull() ?: o
+            val played = bag.optJSONArray("playedIds") ?: JSONArray()
             synchronized(lock) {
                 pool.clear(); pool.addAll(loaded)
                 playedIds.clear()
                 for (i in 0 until played.length()) played.optString(i)?.let { playedIds.add(it) }
-                lastId = o.optString("lastId").ifBlank { null }
+                lastId = bag.optString("lastId").ifBlank { null }
                 updatedAtMillis = o.optLong("updatedAt").takeIf { it > 0 }
             }
         }.onFailure { Log.w(TAG, "loadFromDisk failed", it) }
         setStatus(message = if (poolSize() == 0) "No headlines yet - connect and refresh." else null)
     }
 
-    private suspend fun persist() = withContext(Dispatchers.IO) {
+    /** Write the headline cache (headlines + freshness stamp). Merge only. */
+    private suspend fun persistCache() = withContext(Dispatchers.IO) {
         val snapshot = synchronized(lock) {
             val o = JSONObject()
             val arr = JSONArray()
@@ -395,12 +411,22 @@ class NewsRepository(private val context: Context) {
                 )
             }
             o.put("headlines", arr)
-            o.put("playedIds", JSONArray(playedIds.toList()))
-            o.put("lastId", lastId ?: "")
             o.put("updatedAt", updatedAtMillis ?: 0L)
             o.toString()
         }
         runCatching { cacheFile().writeText(snapshot) }
-            .onFailure { Log.w(TAG, "persist failed", it) }
+            .onFailure { Log.w(TAG, "persistCache failed", it) }
+    }
+
+    /** Write just the shuffle-bag progress. Cheap enough for every draw. */
+    private suspend fun persistBag() = withContext(Dispatchers.IO) {
+        val snapshot = synchronized(lock) {
+            JSONObject()
+                .put("playedIds", JSONArray(playedIds.toList()))
+                .put("lastId", lastId ?: "")
+                .toString()
+        }
+        runCatching { bagFile().writeText(snapshot) }
+            .onFailure { Log.w(TAG, "persistBag failed", it) }
     }
 }

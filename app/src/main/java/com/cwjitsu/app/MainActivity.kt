@@ -55,6 +55,10 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
+        // Backgrounding is the most likely moment before the OS reclaims the
+        // process; flush shuffle-bag progress so recently-played headlines
+        // aren't replayed on the next launch.
+        (application as? CWJitsuApp)?.news?.flushBag()
     }
 
     private fun maybeRequestNotificationPermission() {
