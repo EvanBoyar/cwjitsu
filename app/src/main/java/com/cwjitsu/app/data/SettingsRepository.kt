@@ -24,11 +24,23 @@ import com.cwjitsu.app.practice.SpokenAnswerMode
 import com.cwjitsu.app.practice.SloppyMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
 
 private val Context.dataStore by preferencesDataStore(name = "cwjitsu_prefs")
+
+/**
+ * A single snapshot of everything the practice UI needs to render, so the UI
+ * has one flow to gate on. [mixed] is null on a genuine first run (nothing
+ * saved yet); a null snapshot itself means the settings have not loaded from
+ * DataStore yet.
+ */
+data class LoadedSettings(
+    val config: PracticeConfig,
+    val mixed: MixedConfig?,
+)
 
 /**
  * Persists [PracticeConfig] and the user's [MixedConfig] to a DataStore and
@@ -182,6 +194,20 @@ class SettingsRepository(private val context: Context) {
         .map { p ->
             val json = p[Keys.MIXED_CONFIG_JSON] ?: return@map null
             runCatching { parseMixedConfig(json) }.getOrNull()
+        }
+
+    /**
+     * The persisted [PracticeConfig] and [MixedConfig] as a single snapshot.
+     * [combine] withholds its first emission until BOTH underlying flows have
+     * read from DataStore, so a collector can treat "no emission yet" (its
+     * chosen initial value) as "settings still loading" and hold the UI back
+     * until the user's real selection is known - instead of briefly rendering
+     * constructor defaults while the disk read is in flight. [mixed] is null
+     * when nothing has been saved yet (genuine first run).
+     */
+    val loadedSettingsFlow: Flow<LoadedSettings> =
+        combine(configFlow, mixedConfigFlow) { config, mixed ->
+            LoadedSettings(config, mixed)
         }
 
     suspend fun saveMixedConfig(config: MixedConfig) {

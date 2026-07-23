@@ -127,13 +127,19 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(onPickSettings: () -> Unit) {
     val app = CWJitsuApp.instance
-    val config by app.settings.configFlow.collectAsStateWithLifecycle(initialValue = PracticeConfig())
     val orchestrator = app.orchestrator
     val runnerState by orchestrator.runnerState.collectAsStateWithLifecycle()
     val isPaused by orchestrator.paused.collectAsStateWithLifecycle()
     val nowPlaying by orchestrator.nowPlaying.collectAsStateWithLifecycle()
     val newsStatus by app.news.status.collectAsStateWithLifecycle()
-    val savedConfig by app.settings.mixedConfigFlow.collectAsStateWithLifecycle(initialValue = null)
+    // Both configs arrive as one snapshot so there is a single "loaded"
+    // signal: `loaded == null` means DataStore hasn't emitted yet. Until it
+    // has, the config-dependent body of the screen is withheld rather than
+    // rendered with constructor defaults, which would briefly flash a
+    // configuration different from what the user actually saved.
+    val loaded by app.settings.loadedSettingsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val config: PracticeConfig = loaded?.config ?: PracticeConfig()
+    val savedConfig: MixedConfig? = loaded?.mixed
     val effectiveConfig: MixedConfig = savedConfig ?: MixedConfig()
     // "Now playing" is hidden by default to avoid spoiling the answer.
     var showNowPlaying by remember { mutableStateOf(false) }
@@ -479,6 +485,19 @@ fun HomeScreen(onPickSettings: () -> Unit) {
             }
         },
     ) { padding ->
+        if (loaded == null) {
+            // Saved settings are still being read from DataStore. The read is
+            // near-instant, so render an empty placeholder rather than the
+            // category grid: this avoids flashing constructor defaults before
+            // the user's real selection is known, without a spinner that would
+            // only ever show for a single frame (a stray dot, not a spin).
+            Box(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize(),
+            )
+            return@Scaffold
+        }
         Column(
             modifier = Modifier
                 .padding(padding)
