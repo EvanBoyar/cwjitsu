@@ -1,13 +1,135 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Adaptive icon foreground. The PNG (441x441) is drawn into the central
-  66dp x 66dp safe zone of the 108dp foreground canvas, so the launcher mask
-  never crops the artwork.
+  Adaptive-icon foreground: the "morse jiujitsu" scene converted from
+  morse-jiujitsu-icon.svg (dot throwing the dash on the tatami).
+  Palette: amber #E7A33D, dash blue #1E3A5F, charcoal #3A3A3A,
+  wall #E3E8DA, tatami #4A6B52.
 -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/cwjicon"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+  <!-- Scale the whole 128 badge to ~68% and center it, so the launcher mask
+       (which only reveals the inner ~72dp of the 108dp canvas) never slices the
+       artwork. The wall ring matches ic_launcher_background so masks blend. -->
+  <group
+      android:pivotX="64"
+      android:pivotY="64"
+      android:scaleX="0.68"
+      android:scaleY="0.68">
+
+    <!-- full-circle background: dojo wall -->
+    <path
+        android:fillColor="#E3E8DA"
+        android:pathData="M64,0 A64,64 0 1,0 64,128 A64,64 0 1,0 64,0 Z" />
+    <!-- tatami mat: bottom segment of the circle -->
+    <path
+        android:fillColor="#4A6B52"
+        android:pathData="M8.6,96 A64,64 0 0,0 119.4,96 Z" />
+
+    <!-- DASH: dark blue, airborne mid-throw -->
+    <group
+        android:translateX="62"
+        android:translateY="34"
+        android:pivotX="0"
+        android:pivotY="0"
+        android:rotation="-30">
+        <path
+            android:fillColor="#1E3A5F"
+            android:pathData="M-33.5,-13.5 L22.9,-13.5 A13.5,13.5 0 0,1 22.9,13.5 L-33.5,13.5 A13.5,13.5 0 0,1 -33.5,-13.5 Z" />
+        <path
+            android:fillColor="#3A3A3A"
+            android:pathData="M-5,-13.5 L4,-13.5 L4,13.5 L-5,13.5 Z" />
+        <!-- knot + tails on the belly side -->
+        <path
+            android:fillColor="#3A3A3A"
+            android:pathData="M-5.9,9 A5.4,5.4 0 1,0 4.9,9 A5.4,5.4 0 1,0 -5.9,9 Z" />
+        <path
+            android:strokeColor="#3A3A3A"
+            android:strokeWidth="4"
+            android:strokeLineCap="round"
+            android:pathData="M-2,13.5 Q-4.5,16.5 -5.5,19.6" />
+        <path
+            android:strokeColor="#3A3A3A"
+            android:strokeWidth="4"
+            android:strokeLineCap="round"
+            android:pathData="M1,14 Q-0.7,17.5 -3.9,20.8" />
+        <!-- startled face -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12.5,-3 A4.5,4.5 0 1,0 21.5,-3 A4.5,4.5 0 1,0 12.5,-3 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M21.5,-3 A4.5,4.5 0 1,0 30.5,-3 A4.5,4.5 0 1,0 21.5,-3 Z" />
+        <path
+            android:fillColor="#3A3A3A"
+            android:pathData="M15.4,-1.4 A2.1,2.1 0 1,0 19.6,-1.4 A2.1,2.1 0 1,0 15.4,-1.4 Z" />
+        <path
+            android:fillColor="#3A3A3A"
+            android:pathData="M24.4,-1.4 A2.1,2.1 0 1,0 28.6,-1.4 A2.1,2.1 0 1,0 24.4,-1.4 Z" />
+        <path
+            android:fillColor="#3A3A3A"
+            android:pathData="M19.2,6 A2.3,2.3 0 1,0 23.8,6 A2.3,2.3 0 1,0 19.2,6 Z" />
+    </group>
+
+    <!-- DOT: amber, planted, executing the throw -->
+    <path
+        android:strokeColor="#E7A33D"
+        android:strokeWidth="9.5"
+        android:strokeLineCap="round"
+        android:pathData="M48,69 Q45,59 53,54" />
+    <path
+        android:strokeColor="#E7A33D"
+        android:strokeWidth="9.5"
+        android:strokeLineCap="round"
+        android:pathData="M70,69 Q79,56 77,40" />
+    <path
+        android:fillColor="#E7A33D"
+        android:pathData="M36,83 A24,24 0 1,0 84,83 A24,24 0 1,0 36,83 Z" />
+    <!-- determined face + battle-cry mouth -->
+    <path
+        android:fillColor="#3A3A3A"
+        android:pathData="M52.4,75 A2.6,2.6 0 1,0 57.6,75 A2.6,2.6 0 1,0 52.4,75 Z" />
+    <path
+        android:fillColor="#3A3A3A"
+        android:pathData="M63.4,73 A2.6,2.6 0 1,0 68.6,73 A2.6,2.6 0 1,0 63.4,73 Z" />
+    <path
+        android:strokeColor="#3A3A3A"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M51,70.5 L58,72" />
+    <path
+        android:strokeColor="#3A3A3A"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M62,68.5 L69,70" />
+    <path
+        android:fillColor="#3A3A3A"
+        android:pathData="M57.5,81.5 A3.5,2.2 0 1,0 64.5,81.5 A3.5,2.2 0 1,0 57.5,81.5 Z" />
+    <!-- belt: clipped to the dot body so it hugs the round belly -->
+    <group>
+        <clip-path
+            android:pathData="M36,83 A24,24 0 1,0 84,83 A24,24 0 1,0 36,83 Z" />
+        <path
+            android:strokeColor="#3A3A3A"
+            android:strokeWidth="7.5"
+            android:pathData="M33,87 Q60,101 87,87" />
+    </group>
+    <!-- belt knot + hanging tails -->
+    <path
+        android:fillColor="#3A3A3A"
+        android:pathData="M47.4,93.5 A4.6,4.6 0 1,0 56.6,93.5 A4.6,4.6 0 1,0 47.4,93.5 Z" />
+    <path
+        android:strokeColor="#3A3A3A"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M49.5,96 Q47.5,98.5 47.5,100" />
+    <path
+        android:strokeColor="#3A3A3A"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M54.5,96.5 Q56,99 58,101" />
+  </group>
+</vector>
