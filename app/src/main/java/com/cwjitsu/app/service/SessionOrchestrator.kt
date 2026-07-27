@@ -116,15 +116,31 @@ class SessionOrchestrator(
 
     private var job: Job? = null
 
+    // Reported for each item at the moment its audio starts. Held as a field
+    // rather than threaded through playItem's already-long parameter list;
+    // set by [start] alongside the other per-session state.
+    private var onItemStarted: (ContentItem) -> Unit = {}
+
     /**
      * Start a session. [configFlow] is the live settings flow rather than a
      * one-shot snapshot: the loop re-reads it before every item, so settings
      * changes apply from the very next send, and a collector pushes each
      * emission straight into the engine so audio-level knobs (master volume,
      * noise) change in real time - no stop/start required.
+     *
+     * [onItemStarted] fires once per item, when that item's code actually
+     * begins playing - NOT when the regenerator produced it. Rounds are
+     * generated a whole batch at a time and a batch can be abandoned partway
+     * through, so generators that draw without replacement need the
+     * difference. Called on the playback coroutine; keep it cheap.
      */
-    fun start(regenerator: ContentRegenerator, configFlow: Flow<PracticeConfig>) {
+    fun start(
+        regenerator: ContentRegenerator,
+        configFlow: Flow<PracticeConfig>,
+        onItemStarted: (ContentItem) -> Unit = {},
+    ) {
         stop()
+        this.onItemStarted = onItemStarted
         Log.d(TAG, "start regenerator")
         _paused.value = false
         skipRequested = false
@@ -392,6 +408,11 @@ class SessionOrchestrator(
 
         engine.setSchedule(schedule)
         engine.play()
+        // The item is now audible, so it counts as played even if the user
+        // skips partway through. Reported here rather than after the wait
+        // below so that a skip - or the process being reclaimed mid-item -
+        // doesn't lose the fact that it was heard.
+        onItemStarted(item)
         waitForAudioToFinish()
 
         // Skip/Previous/Restart pressed during the tone: engine.abort()

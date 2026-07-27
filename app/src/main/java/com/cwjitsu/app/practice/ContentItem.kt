@@ -33,4 +33,11 @@ data class ContentItem(
     // exactly once. Used for long items (e.g. a news headline) where hearing
     // the whole thing repeated would be tedious.
     val singleShot: Boolean = false,
+    // For content drawn without replacement, the key identifying the draw, so
+    // it can be confirmed once the item actually reaches the speaker. Rounds
+    // are generated a whole batch at a time and can be abandoned before every
+    // item plays, so drawing and playing are not the same event. Only news
+    // headlines set this (see NewsRepository.markPlayed); everything else is
+    // generated fresh each round and has nothing to confirm.
+    val newsId: String? = null,
 )

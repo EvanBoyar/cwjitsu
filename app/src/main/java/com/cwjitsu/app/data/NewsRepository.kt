@@ -17,6 +17,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,12 +75,37 @@ class NewsRepository(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val random = Random.Default
 
+    // Serializes shuffle-bag writes. Draws, refreshes and flushBag() all fire
+    // their own persistBag() onto the IO pool, which imposes no ordering
+    // between them: two writers could interleave inside File.writeText and
+    // leave torn JSON - which loadFromDisk swallows, silently resetting the
+    // ENTIRE bag - or simply finish out of order and leave an older snapshot
+    // on disk. Held across both the snapshot and the write so that "last
+    // write wins" also means "newest state wins". Always acquired BEFORE
+    // `lock`, never the other way round, so the two can't deadlock.
+    private val bagWriteMutex = Mutex()
+
+    // Same job for the headline cache: two refreshes can overlap (the News
+    // panel triggers one on every appearance, the daily worker fires its own),
+    // and each ends in a persistCache(). Its own mutex rather than sharing
+    // [bagWriteMutex] - the two files are independent, and a bag write on
+    // every draw shouldn't queue behind a 500-headline cache write.
+    private val cacheWriteMutex = Mutex()
+
     // Guarded by `lock`: the pool and the shuffle-bag state.
     private val lock = Any()
     private val pool = mutableListOf<Headline>()
     private val playedIds = mutableSetOf<String>()
     private var lastId: String? = null
     private var updatedAtMillis: Long? = null
+
+    // The headline handed out by the most recent [nextHeadline] that hasn't
+    // been confirmed as heard yet. A draw is NOT a play: the practice loop
+    // generates a whole round of items at once (one per enabled category) and
+    // can be stopped before the round reaches the headline, so committing at
+    // draw time silently burned headlines the user never heard. Deliberately
+    // never persisted - an uncommitted draw belongs back in the bag.
+    private var pendingId: String? = null
 
     private val _status = MutableStateFlow(NewsStatus())
     val status: StateFlow<NewsStatus> = _status
@@ -94,8 +121,15 @@ class NewsRepository(private val context: Context) {
      * on while offline, but playback must honor the user's current selection.
      * Returns null when nothing eligible is cached. Safe to call every round
      * from the practice loop - it never blocks on I/O.
+     *
+     * The draw is only provisional: the caller must confirm it with
+     * [markPlayed] once the headline actually reaches the speaker, or it
+     * returns to the bag.
      */
     fun nextHeadline(allowedSourceIds: Set<String>): Headline? = synchronized(lock) {
+        // A draw still uncommitted at this point was never heard - its round
+        // was abandoned - so it goes back in the bag rather than being lost.
+        pendingId = null
         val eligible = pool.filter { it.sourceId in allowedSourceIds }
         if (eligible.isEmpty()) return null
         var candidates = eligible.filter { it.id !in playedIds }
@@ -111,15 +145,30 @@ class NewsRepository(private val context: Context) {
             if (candidates.isEmpty()) candidates = eligible
         }
         val pick = candidates.random(random)
-        playedIds.add(pick.id)
-        lastId = pick.id
-        // Persist bag progress on every draw. This is a small, dedicated file
-        // (playedIds + lastId only), not the full headline cache, so the write
-        // is cheap - and without it, a session's most recent draws are lost
-        // when the process is reclaimed after playback stops, causing already-
-        // heard headlines to replay on the next launch.
-        scope.launch { persistBag() }
+        pendingId = pick.id
         pick
+    }
+
+    /**
+     * Confirm that a headline drawn by [nextHeadline] actually played, moving
+     * it into the shuffle bag for good. Idempotent, so stepping back onto a
+     * headline with Previous is harmless.
+     *
+     * Bag progress is persisted here rather than at draw time. The file is
+     * small and dedicated (playedIds + lastId only), not the full headline
+     * cache, so the write is cheap - and without it a session's most recent
+     * plays are lost when the process is reclaimed, replaying already-heard
+     * headlines on the next launch.
+     */
+    fun markPlayed(id: String) {
+        val changed = synchronized(lock) {
+            pendingId = null
+            val added = playedIds.add(id)
+            val moved = lastId != id
+            lastId = id
+            added || moved
+        }
+        if (changed) scope.launch { persistBag() }
     }
 
     /** Kick a background refresh of the given feeds. Non-blocking. */
@@ -220,6 +269,7 @@ class NewsRepository(private val context: Context) {
         val ids = pool.mapTo(HashSet()) { it.id }
         playedIds.retainAll(ids)
         if (lastId !in ids) lastId = null
+        if (pendingId !in ids) pendingId = null
         updatedAtMillis = System.currentTimeMillis()
     }
 
@@ -275,7 +325,8 @@ class NewsRepository(private val context: Context) {
                         inEntry = false
                         val t = cleanTitle(title)
                         if (t.isNotBlank()) {
-                            val idBase = guid.ifBlank { link.ifBlank { "${feed.id}:$t" } }
+                            val idBase = canonicalId(guid)
+                                .ifBlank { canonicalId(link).ifBlank { "${feed.id}:$t" } }
                             out.add(
                                 Headline(
                                     id = idBase,
@@ -310,6 +361,28 @@ class NewsRepository(private val context: Context) {
             }
         }
         return sb.toString()
+    }
+
+    /**
+     * Canonical identity for a headline: the ARTICLE, not the revision.
+     *
+     * Most feeds publish a stable permalink guid, but BBC appends a revision
+     * counter as a URL fragment - ".../articles/clyj834jn5lo#0" becomes "#1"
+     * the first time the story is edited, and a typical BBC world feed has
+     * most of its items already past #0. Keying off the raw guid made every
+     * edit a brand-new headline: [merge] replaces a refreshed feed's entries
+     * wholesale, so the old id left the pool, `playedIds.retainAll` dropped
+     * it with the rest, and an already-heard story came straight back around.
+     *
+     * Only URLs are fragment-stripped; the synthesized "<feedId>:<title>"
+     * fallback is left alone because a headline can legitimately contain '#'.
+     * Note this affects identity ONLY - the pool is rebuilt from each fetch,
+     * so a revised story still plays with its updated wording.
+     */
+    private fun canonicalId(raw: String): String {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return trimmed
+        return trimmed.substringBefore('#').trim().ifBlank { trimmed }
     }
 
     private fun cleanTitle(raw: String): String =
@@ -354,6 +427,26 @@ class NewsRepository(private val context: Context) {
     private fun cacheFile(): File = File(context.filesDir, CACHE_FILE)
     private fun bagFile(): File = File(context.filesDir, BAG_FILE)
 
+    /**
+     * Replace [file] with [text] atomically: write a sibling temp, then
+     * rename over the target. A process death mid-write then leaves an
+     * orphaned temp rather than a half-written file that the loader can only
+     * throw away - and for the bag file, throwing it away means silently
+     * resetting every headline to unplayed. Callers hold the matching write
+     * mutex, which is what keeps two writers off the same temp path.
+     */
+    private fun writeAtomically(file: File, text: String) {
+        val tmp = File(file.parentFile, "${file.name}.tmp")
+        tmp.writeText(text)
+        // Same directory, so this is an atomic replace. The fallback covers
+        // the rename failing on an exotic filesystem, where a direct
+        // (non-atomic) write still beats dropping the data entirely.
+        if (!tmp.renameTo(file)) {
+            file.writeText(text)
+            tmp.delete()
+        }
+    }
+
     private suspend fun loadFromDisk() = withContext(Dispatchers.IO) {
         val file = cacheFile()
         if (!file.exists()) {
@@ -365,7 +458,11 @@ class NewsRepository(private val context: Context) {
             val arr = o.optJSONArray("headlines") ?: JSONArray()
             val loaded = (0 until arr.length()).mapNotNull { i ->
                 val ho = arr.optJSONObject(i) ?: return@mapNotNull null
-                val id = ho.optString("id"); val title = ho.optString("title")
+                // Migration: caches written before ids were canonicalized hold
+                // raw guids, so normalize on the way in - otherwise the bag
+                // entries below would miss every headline until the next
+                // successful refresh rewrote the pool.
+                val id = canonicalId(ho.optString("id")); val title = ho.optString("title")
                 if (id.isBlank() || title.isBlank()) return@mapNotNull null
                 val name = ho.optString("source")
                 // Migration: caches written before headlines carried the
@@ -383,50 +480,81 @@ class NewsRepository(private val context: Context) {
             // in-cache fields for caches written before the split.
             val bag = runCatching {
                 bagFile().takeIf { it.exists() }?.let { JSONObject(it.readText()) }
+            }.onFailure {
+                // Loud on purpose: falling through to `o` (the headline cache,
+                // which has never carried bag fields) resets the whole shuffle
+                // bag, and that used to happen without a trace.
+                Log.w(TAG, "bag file unreadable - shuffle progress reset", it)
             }.getOrNull() ?: o
             val played = bag.optJSONArray("playedIds") ?: JSONArray()
             synchronized(lock) {
-                pool.clear(); pool.addAll(loaded)
+                // distinctBy: canonicalization can collapse two cached entries
+                // that were distinct under their raw guids (same article, two
+                // revisions). merge() would dedupe on the next refresh anyway.
+                pool.clear(); pool.addAll(loaded.distinctBy { it.id })
                 playedIds.clear()
-                for (i in 0 until played.length()) played.optString(i)?.let { playedIds.add(it) }
-                lastId = bag.optString("lastId").ifBlank { null }
+                // Same migration as the pool ids above - both sides of the
+                // "have I played this?" comparison must be canonical.
+                for (i in 0 until played.length()) {
+                    played.optString(i)?.let { playedIds.add(canonicalId(it)) }
+                }
+                lastId = canonicalId(bag.optString("lastId")).ifBlank { null }
                 updatedAtMillis = o.optLong("updatedAt").takeIf { it > 0 }
             }
         }.onFailure { Log.w(TAG, "loadFromDisk failed", it) }
         setStatus(message = if (poolSize() == 0) "No headlines yet - connect and refresh." else null)
     }
 
-    /** Write the headline cache (headlines + freshness stamp). Merge only. */
+    /**
+     * Write the headline cache (headlines + freshness stamp). Merge only.
+     * Serialized and atomic for the same reasons as [persistBag]; a torn
+     * cache is less costly (the next refresh rebuilds it) but it still
+     * strands the user with no headlines until then - exactly the offline
+     * moment the cache exists for.
+     */
     private suspend fun persistCache() = withContext(Dispatchers.IO) {
-        val snapshot = synchronized(lock) {
-            val o = JSONObject()
-            val arr = JSONArray()
-            for (h in pool) {
-                arr.put(
-                    JSONObject()
-                        .put("id", h.id)
-                        .put("title", h.title)
-                        .put("sourceId", h.sourceId)
-                        .put("source", h.sourceName)
-                )
+        cacheWriteMutex.withLock {
+            val snapshot = synchronized(lock) {
+                val o = JSONObject()
+                val arr = JSONArray()
+                for (h in pool) {
+                    arr.put(
+                        JSONObject()
+                            .put("id", h.id)
+                            .put("title", h.title)
+                            .put("sourceId", h.sourceId)
+                            .put("source", h.sourceName)
+                    )
+                }
+                o.put("headlines", arr)
+                o.put("updatedAt", updatedAtMillis ?: 0L)
+                o.toString()
             }
-            o.put("headlines", arr)
-            o.put("updatedAt", updatedAtMillis ?: 0L)
-            o.toString()
+            runCatching { writeAtomically(cacheFile(), snapshot) }
+                .onFailure { Log.w(TAG, "persistCache failed", it) }
         }
-        runCatching { cacheFile().writeText(snapshot) }
-            .onFailure { Log.w(TAG, "persistCache failed", it) }
     }
 
-    /** Write just the shuffle-bag progress. Cheap enough for every draw. */
+    /**
+     * Write just the shuffle-bag progress. Cheap enough for every draw.
+     *
+     * Serialized by [bagWriteMutex], which is held across the snapshot AND
+     * the write: taking the snapshot under `lock` alone left a window where
+     * an older snapshot could win the race to disk, and concurrent writers
+     * could tear the file outright. Written via temp-then-rename so that a
+     * process death mid-write leaves an orphaned temp rather than a
+     * half-written bag that [loadFromDisk] can only discard.
+     */
     private suspend fun persistBag() = withContext(Dispatchers.IO) {
-        val snapshot = synchronized(lock) {
-            JSONObject()
-                .put("playedIds", JSONArray(playedIds.toList()))
-                .put("lastId", lastId ?: "")
-                .toString()
+        bagWriteMutex.withLock {
+            val snapshot = synchronized(lock) {
+                JSONObject()
+                    .put("playedIds", JSONArray(playedIds.toList()))
+                    .put("lastId", lastId ?: "")
+                    .toString()
+            }
+            runCatching { writeAtomically(bagFile(), snapshot) }
+                .onFailure { Log.w(TAG, "persistBag failed", it) }
         }
-        runCatching { bagFile().writeText(snapshot) }
-            .onFailure { Log.w(TAG, "persistBag failed", it) }
     }
 }

@@ -352,6 +352,9 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     text = current.newsCharFilter.apply(sanitizeHeadline(h.title)),
                     spokenAnswer = h.title,
                     singleShot = current.newsNoRepeat,
+                    // Confirmed via onItemStarted below once it actually
+                    // plays; the draw alone doesn't consume it.
+                    newsId = h.id,
                 )
             }
         } else null
@@ -472,7 +475,16 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                             // Hand the orchestrator the live settings flow
                             // (not a snapshot) so mid-session edits apply
                             // without a stop/start.
-                            !isRunning -> orchestrator.start(regenerator, app.settings.configFlow)
+                            !isRunning -> orchestrator.start(
+                                regenerator,
+                                app.settings.configFlow,
+                                // A headline counts as heard when it plays,
+                                // not when the round that contains it was
+                                // generated - that round may never get there.
+                                onItemStarted = { item ->
+                                    item.newsId?.let { app.news.markPlayed(it) }
+                                },
+                            )
                             isPaused -> orchestrator.resume()
                             else -> orchestrator.pause()
                         }
