@@ -52,7 +52,14 @@ object NewsSources {
         NewsSource("bbc", "BBC", "https://feeds.bbci.co.uk/news/world/rss.xml", true),
         NewsSource("guardian", "The Guardian", "https://www.theguardian.com/world/rss", true),
         NewsSource("vox", "Vox", "https://www.vox.com/rss/index.xml", true),
-        NewsSource("gothamist", "Gothamist", "https://gothamist.com/feed", true),
+        // Gothamist's public feed URL sits behind Cloudflare bot filtering
+        // that 403s non-browser HTTP clients (regardless of user agent), so
+        // we fetch the identical feed from the NYPR CMS origin instead - the
+        // URL the feed itself declares as its atom:link self. Same items,
+        // same timestamps, served from CloudFront with no bot wall. Item
+        // guids use wnyc.org hosts there, hence one-time replay of played
+        // history at the switch.
+        NewsSource("gothamist", "Gothamist", "https://cms.prod.nypr.digital/feed/", true),
         NewsSource("thecity", "The City", "https://www.thecity.nyc/rss/", true),
     )
 

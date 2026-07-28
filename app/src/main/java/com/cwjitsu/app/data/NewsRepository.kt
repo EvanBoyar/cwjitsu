@@ -303,7 +303,15 @@ class NewsRepository(private val context: Context) {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "CWJitsu/1.0 (Android)")
+            // Browser-shaped UA (with the app token appended for feed
+            // operators' logs): Cloudflare bot rules on some feeds (e.g.
+            // Gothamist) return 403 to unknown non-browser user agents,
+            // while every mainstream feed is fine with a browser UA.
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 CWJitsu/1.0",
+            )
             setRequestProperty("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml")
         }
         try {
