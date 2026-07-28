@@ -21,8 +21,9 @@ import kotlin.math.roundToInt
 
 /**
  * Reusable Compose panel that exposes the whole [PracticeConfig] to the user,
- * grouped into titled sections (Speed / Realism / Flow / Spoken answers /
- * Tone / Background noise) separated by dividers.
+ * grouped into titled sections (Speed / Flow / Spoken answers / Tone /
+ * Realism) separated by dividers. Background noise lives inside Realism,
+ * which sits last so the everyday knobs stay near the top of the page.
  *
  * Edits are emitted as TRANSFORMS ([onUpdate] receives a `(config) -> config`
  * lambda) rather than full replacement objects, so the caller can apply them
@@ -88,84 +89,6 @@ fun ConfigPanel(
             // Grayed out while Farnsworth is off so the user can still see
             // the layout but cannot accidentally change a disabled value.
             enabled = farnsOn,
-        )
-
-        // ---------- Realism ----------
-        // Everything that makes the audio sound like real operators on a
-        // real band instead of a machine: per-item speed spread, humanized
-        // keying, wandering tone frequency, and per-item volume changes.
-        HorizontalDivider()
-        Text("Realism", style = MaterialTheme.typography.titleLarge)
-
-        // Speed variability: each sent item is rendered at a random character
-        // speed within [base - subtracted, base + added]. One two-thumb
-        // slider sets both offsets: the left thumb (<= 0) is the subtracted
-        // WPM, the right thumb (>= 0) the added WPM, so 0 (the base speed)
-        // always stays inside the window.
-        ToggleRow(
-            label = "Speed variability",
-            checked = config.speedVariabilityEnabled,
-            onCheckedChange = { on -> onUpdate { it.copy(speedVariabilityEnabled = on) } },
-        )
-        if (config.speedVariabilityEnabled) {
-            val maxVar = PracticeConfig.MAX_SPEED_VARIATION_WPM
-            LabeledRangeSlider(
-                label = "Variation (WPM)",
-                value = -config.speedVarMinusWpm.toFloat()..config.speedVarPlusWpm.toFloat(),
-                valueRange = -maxVar.toFloat()..maxVar.toFloat(),
-                steps = 2 * maxVar - 1,
-                valueLabel = "-${config.speedVarMinusWpm} / +${config.speedVarPlusWpm}",
-                onValueChange = { range ->
-                    onUpdate {
-                        it.copy(
-                            // Each thumb is pinned to its own side of 0 so the
-                            // stored offsets are always non-negative.
-                            speedVarMinusWpm = (-range.start.roundToInt()).coerceIn(0, maxVar),
-                            speedVarPlusWpm = range.endInclusive.roundToInt().coerceIn(0, maxVar),
-                        )
-                    }
-                },
-            )
-        }
-
-        // Keying character: clean machine timing vs humanized straight-key
-        // jitter.
-        Text("Keying character", style = MaterialTheme.typography.bodyLarge)
-        SloppyModeRow(
-            current = config.sloppyMode,
-            onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
-        )
-
-        ToggleRow(
-            label = "Randomize tone frequency",
-            checked = config.randomizeFrequency,
-            onCheckedChange = { on -> onUpdate { it.copy(randomizeFrequency = on) } },
-        )
-        if (config.randomizeFrequency) {
-            // Both bounds on one two-thumb slider; RangeSlider keeps
-            // start <= end, so PracticeConfig's min <= max invariant holds
-            // by construction.
-            LabeledRangeSlider(
-                label = "Frequency range (Hz)",
-                value = config.frequencyMinHz.toFloat()..config.frequencyMaxHz.toFloat(),
-                valueRange = 300f..1500f,
-                steps = 119,
-                valueLabel = "${config.frequencyMinHz}-${config.frequencyMaxHz}Hz",
-                onValueChange = { range ->
-                    onUpdate {
-                        it.copy(
-                            frequencyMinHz = range.start.roundToInt().coerceIn(300, 1500),
-                            frequencyMaxHz = range.endInclusive.roundToInt().coerceIn(300, 1500),
-                        )
-                    }
-                },
-            )
-        }
-
-        ToggleRow(
-            label = "Volume variation per item",
-            checked = config.volumeVariationEnabled,
-            onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
         )
 
         // ---------- Flow ----------
@@ -276,7 +199,7 @@ fun ConfigPanel(
         )
 
         LabeledSlider(
-            label = "Master volume",
+            label = "Tone volume",
             value = config.masterVolume,
             valueRange = 0f..1f,
             steps = 99,
@@ -284,9 +207,85 @@ fun ConfigPanel(
             onValueChange = { v -> onUpdate { it.copy(masterVolume = v) } },
         )
 
-        // ---------- Background noise ----------
+        // ---------- Realism ----------
+        // Everything that makes the audio sound like real operators on a
+        // real band instead of a machine: per-item speed spread, humanized
+        // keying, wandering tone frequency, per-item volume changes, and
+        // the background-noise bed. Kept last so the everyday knobs stay
+        // near the top of the page.
         HorizontalDivider()
-        Text("Background noise", style = MaterialTheme.typography.titleLarge)
+        Text("Realism", style = MaterialTheme.typography.titleLarge)
+
+        // Speed variability: each sent item is rendered at a random character
+        // speed within [base - subtracted, base + added]. One two-thumb
+        // slider sets both offsets: the left thumb (<= 0) is the subtracted
+        // WPM, the right thumb (>= 0) the added WPM, so 0 (the base speed)
+        // always stays inside the window.
+        ToggleRow(
+            label = "Speed variability",
+            checked = config.speedVariabilityEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(speedVariabilityEnabled = on) } },
+        )
+        if (config.speedVariabilityEnabled) {
+            val maxVar = PracticeConfig.MAX_SPEED_VARIATION_WPM
+            LabeledRangeSlider(
+                label = "Variation (WPM)",
+                value = -config.speedVarMinusWpm.toFloat()..config.speedVarPlusWpm.toFloat(),
+                valueRange = -maxVar.toFloat()..maxVar.toFloat(),
+                steps = 2 * maxVar - 1,
+                valueLabel = "-${config.speedVarMinusWpm} / +${config.speedVarPlusWpm}",
+                onValueChange = { range ->
+                    onUpdate {
+                        it.copy(
+                            // Each thumb is pinned to its own side of 0 so the
+                            // stored offsets are always non-negative.
+                            speedVarMinusWpm = (-range.start.roundToInt()).coerceIn(0, maxVar),
+                            speedVarPlusWpm = range.endInclusive.roundToInt().coerceIn(0, maxVar),
+                        )
+                    }
+                },
+            )
+        }
+
+        // Keying character: clean machine timing vs humanized straight-key
+        // jitter.
+        Text("Keying character", style = MaterialTheme.typography.bodyLarge)
+        SloppyModeRow(
+            current = config.sloppyMode,
+            onSelect = { mode -> onUpdate { it.copy(sloppyMode = mode) } },
+        )
+
+        ToggleRow(
+            label = "Randomize tone frequency",
+            checked = config.randomizeFrequency,
+            onCheckedChange = { on -> onUpdate { it.copy(randomizeFrequency = on) } },
+        )
+        if (config.randomizeFrequency) {
+            // Both bounds on one two-thumb slider; RangeSlider keeps
+            // start <= end, so PracticeConfig's min <= max invariant holds
+            // by construction.
+            LabeledRangeSlider(
+                label = "Frequency range (Hz)",
+                value = config.frequencyMinHz.toFloat()..config.frequencyMaxHz.toFloat(),
+                valueRange = 300f..1500f,
+                steps = 119,
+                valueLabel = "${config.frequencyMinHz}-${config.frequencyMaxHz}Hz",
+                onValueChange = { range ->
+                    onUpdate {
+                        it.copy(
+                            frequencyMinHz = range.start.roundToInt().coerceIn(300, 1500),
+                            frequencyMaxHz = range.endInclusive.roundToInt().coerceIn(300, 1500),
+                        )
+                    }
+                },
+            )
+        }
+
+        ToggleRow(
+            label = "Volume variation per item",
+            checked = config.volumeVariationEnabled,
+            onCheckedChange = { on -> onUpdate { it.copy(volumeVariationEnabled = on) } },
+        )
 
         // One master switch; NoiseType.NONE is the stored "off" state, so
         // turning the switch on picks WHITE as a starting type. The type

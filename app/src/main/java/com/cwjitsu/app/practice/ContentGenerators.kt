@@ -207,9 +207,14 @@ class WordContentGenerator(
     private val words: List<String>,
     private val random: Random = Random.Default,
 ) {
-    fun batch(count: Int): List<ContentItem> =
-        List(count) { words.random(random) }
+    fun batch(count: Int): List<ContentItem> {
+        // An empty dictionary (e.g. asset failed to load) emits nothing,
+        // matching how an empty character pool behaves, instead of
+        // crashing random() on an empty collection.
+        if (words.isEmpty()) return emptyList()
+        return List(count) { words.random(random) }
             .map { ContentItem(text = it.uppercase(), spokenAnswer = it.lowercase()) }
+    }
 }
 
 /**

@@ -75,10 +75,17 @@ data class PracticeConfig(
     val frequencyMaxHz: Int = 800,
     val randomizeFrequency: Boolean = false,
     val volumeVariationEnabled: Boolean = true,
+    /**
+     * Volume of the radio side of the mix: the CW tone (including the
+     * courtesy tone) and, with it, the background-noise bed, whose own
+     * [noiseVolume] sets the noise's share WITHIN this level. Shown in the
+     * UI as "Tone volume". Never affects the spoken answer; the field name
+     * is kept for DataStore compatibility.
+     */
     val masterVolume: Float = 0.85f,
     /**
-     * Volume of the spoken (TTS) answer, independent of [masterVolume]
-     * which only scales the CW tone. 1.0 = the engine's full volume.
+     * Volume of the spoken (TTS) answer, fully independent of
+     * [masterVolume]. 1.0 = the engine's full volume.
      */
     val ttsVolume: Float = 1.0f,
     val noiseType: NoiseType = NoiseType.NONE,

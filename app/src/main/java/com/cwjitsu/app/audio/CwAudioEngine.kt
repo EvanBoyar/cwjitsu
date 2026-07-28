@@ -256,6 +256,17 @@ class CwAudioEngine(
         // fade-in on an uninterrupted tone would itself click).
         var toneLive = false
 
+        // Worker-local snapshot of the schedule and position the last tone
+        // block was rendered from. The leaving-tone declick fades from THIS,
+        // not from curSchedule: an abort() arriving right after a pause()
+        // (inside the same ~one-block window, before this loop has rendered
+        // the pause's fade-out) nulls curSchedule immediately, and fading
+        // from the shared field would silently skip the declick and step the
+        // stream to silence with a pop. The snapshot can't be pulled out from
+        // under this thread.
+        var liveSched: Schedule? = null
+        var livePos = 0L
+
         while (sessionRunning) {
             val sched: Schedule?
             val pos: Long
@@ -306,8 +317,13 @@ class CwAudioEngine(
                 // element already ended through its own release ramp.
                 if (toneLive) {
                     toneLive = false
-                    if (sched != null && pos < sched.totalSamples) {
-                        renderDeclickTail(block, noiseBuf, pcm, sched, pos, cfg, ns)
+                    val ds = liveSched
+                    liveSched = null
+                    // livePos >= total means the schedule ended naturally,
+                    // where the last element already went through its own
+                    // release ramp - no declick needed.
+                    if (ds != null && livePos < ds.totalSamples) {
+                        renderDeclickTail(block, noiseBuf, pcm, ds, livePos, cfg, ns)
                         track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
                         // Leave playPos put: resume re-renders from here with a
                         // fade-in, so the cut element eases out then back in.
@@ -325,7 +341,13 @@ class CwAudioEngine(
                     continue
                 }
                 renderNoiseOnly(noiseBuf, pcm, cfg, ns)
-                track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
+                if (track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING) < 0) {
+                    // A dead track returns its error immediately, so without
+                    // this check the idle path would spin at full CPU forever.
+                    onTrackDead(track)
+                    toneLive = false
+                    break
+                }
                 continue
             }
 
@@ -342,15 +364,13 @@ class CwAudioEngine(
             renderBlock(block, noiseBuf, pcm, sched, pos, cfg, ns, fadeInLen)
             val written = track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING)
             if (written < 0) {
-                // The track died (device change, mediaserver restart). Flip
-                // to STOPPED so waiters (waitForAudioToFinish) are released
-                // instead of waiting on a play position that will never
-                // advance again.
+                onTrackDead(track)
                 toneLive = false
-                _state.value = State.STOPPED
                 break
             }
             toneLive = true
+            liveSched = sched
+            livePos = pos + blockSize
 
             synchronized(lock) {
                 if (curSchedule === sched) {
@@ -359,6 +379,35 @@ class CwAudioEngine(
                 }
             }
         }
+    }
+
+    /**
+     * The track died mid-write (device change, mediaserver restart). Tear the
+     * session down from inside the worker: detach and release the track so
+     * the next [play] builds a fresh one instead of leaking this native
+     * handle, and flip STOPPED so waiters (waitForAudioToFinish) are released
+     * instead of waiting on a play position that will never advance again.
+     * If a concurrent [teardown] already claimed the track, it owns the
+     * release and this only clears the render state.
+     */
+    private fun onTrackDead(deadTrack: AudioTrack) {
+        val ownsTrack = synchronized(lock) {
+            val owned = track === deadTrack
+            if (owned) {
+                track = null
+                worker = null
+                sessionRunning = false
+            }
+            curSchedule = null
+            playPos = 0L
+            samplesElapsed = 0L
+            abortRequested = false
+            owned
+        }
+        if (ownsTrack) {
+            try { deadTrack.release() } catch (_: Exception) {}
+        }
+        _state.value = State.STOPPED
     }
 
     private fun noiseAudible(cfg: PracticeConfig): Boolean =

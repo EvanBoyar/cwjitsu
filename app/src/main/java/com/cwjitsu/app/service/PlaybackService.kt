@@ -3,6 +3,8 @@ package com.cwjitsu.app.service
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Process
+import android.util.Log
 import androidx.media3.common.AudioAttributes as MediaAudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -202,20 +204,66 @@ class PlaybackService : MediaSessionService() {
 const val ACTION_STOP_SESSION = "com.cwjitsu.app.STOP_SESSION"
 
 /**
- * MediaSession.Callback that accepts controllers and the custom Stop command.
- * Media button events (notification, Bluetooth, lock screen) arrive as the
- * default play/pause player commands and are handled on the carrier's
+ * MediaSession.Callback that accepts trusted controllers and the custom Stop
+ * command. Media button events (notification, Bluetooth, lock screen) arrive
+ * as the default play/pause player commands and are handled on the carrier's
  * Player.Listener; prev/next arrive on the ForwardingPlayer's seek overrides;
  * the Stop button arrives here as a custom command.
+ *
+ * The service is exported (required for Bluetooth/Auto/lock-screen access),
+ * so without a gate ANY installed app could open a controller and drive or
+ * kill the practice session. [onConnect] therefore only accepts the app
+ * itself, system callers, and the controller classes media3 can identify
+ * (media notification, Android Auto, Automotive); everything else is
+ * rejected. If some accessory's controls ever stop working, its rejected
+ * package/uid shows up in the log line below and can be added to
+ * [TRUSTED_PACKAGES].
  */
 @UnstableApi
 class PlaybackCallback(
     private val onStopSession: () -> Unit,
 ) : MediaSession.Callback {
+
+    companion object {
+        private const val TAG = "CWJitsu/Playback"
+
+        /**
+         * System packages that connect on behalf of physical transport
+         * controls but aren't identifiable through the media3 helpers:
+         * the framework's media-button router and the Bluetooth stack
+         * (AVRCP), plus System UI for the lock-screen/quick-settings
+         * controls on builds where it isn't uid 1000.
+         */
+        private val TRUSTED_PACKAGES = setOf(
+            "android",
+            "com.android.systemui",
+            "com.android.bluetooth",
+        )
+    }
+
+    private fun isTrusted(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+    ): Boolean =
+        controller.uid == Process.myUid() ||
+            controller.uid == Process.SYSTEM_UID ||
+            session.isMediaNotificationController(controller) ||
+            session.isAutomotiveController(controller) ||
+            session.isAutoCompanionController(controller) ||
+            controller.packageName in TRUSTED_PACKAGES
+
     override fun onConnect(
         session: MediaSession,
         controller: MediaSession.ControllerInfo,
     ): MediaSession.ConnectionResult {
+        if (!isTrusted(session, controller)) {
+            Log.w(
+                TAG,
+                "rejecting untrusted controller " +
+                    "${controller.packageName} uid=${controller.uid}",
+            )
+            return MediaSession.ConnectionResult.reject()
+        }
         val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
             .buildUpon()
             .add(SessionCommand(ACTION_STOP_SESSION, Bundle.EMPTY))

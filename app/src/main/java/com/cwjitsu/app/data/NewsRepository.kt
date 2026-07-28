@@ -463,12 +463,17 @@ class NewsRepository(private val context: Context) {
     private fun writeAtomically(file: File, text: String) {
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(text)
-        // Same directory, so this is an atomic replace. The fallback covers
-        // the rename failing on an exotic filesystem, where a direct
-        // (non-atomic) write still beats dropping the data entirely.
+        // Same directory, so this is an atomic replace. Rename onto an
+        // existing target can fail on some filesystems; deleting the target
+        // and renaming again keeps the worst case at "file briefly missing"
+        // (the loader starts fresh) instead of "file half-written". Only if
+        // that also fails does the direct (non-atomic) write run - it still
+        // beats dropping the data entirely.
         if (!tmp.renameTo(file)) {
-            file.writeText(text)
-            tmp.delete()
+            if (!(file.delete() && tmp.renameTo(file))) {
+                file.writeText(text)
+                tmp.delete()
+            }
         }
     }
 

@@ -58,7 +58,17 @@ class TtsManager(private val context: Context) {
     private var tts: TextToSpeech? = null
     @Volatile private var ready: Boolean = false
     @Volatile private var initFailed: Boolean = false
-    private val pendingCallbacks = mutableListOf<() -> Unit>()
+
+    /**
+     * A block queued for engine readiness plus how to abandon it. [cancel]
+     * must resolve whatever the block's caller is awaiting (e.g. invoke the
+     * speak() onDone with false): a queued utterance that is simply dropped
+     * would leave its orchestrator coroutine hanging, and one that is left
+     * queued across a stop() would fire long after the session ended,
+     * audibly speaking a stale answer.
+     */
+    private class Pending(val run: () -> Unit, val cancel: () -> Unit)
+    private val pendingCallbacks = mutableListOf<Pending>()
 
     // The currently-awaited utterance: the listener routes every callback
     // through [resolveIfActive], which fires the captured continuation only
@@ -115,13 +125,16 @@ class TtsManager(private val context: Context) {
                     })
                     val drain = pendingCallbacks.toList()
                     pendingCallbacks.clear()
-                    drain.forEach { it() }
+                    drain.forEach { it.run() }
                 } else {
                     initFailed = true
                     Log.w(TAG, "init TextToSpeech FAIL status=$status")
-                    // Drain pending callers with no work to do; speak() will
-                    // short-circuit with onDone(false) once they retry.
+                    // Resolve queued callers with failure so their awaiting
+                    // coroutines are released now instead of riding out the
+                    // awaitTts timeout.
+                    val drain = pendingCallbacks.toList()
                     pendingCallbacks.clear()
+                    drain.forEach { it.cancel() }
                 }
             }
         }
@@ -134,18 +147,18 @@ class TtsManager(private val context: Context) {
      * can't slip into the list unobserved and be dropped (which would
      * leave its awaiting orchestrator coroutine to the awaitTts timeout).
      */
-    fun whenReady(block: () -> Unit) {
-        val runNow = synchronized(this) {
+    fun whenReady(onCancelled: () -> Unit = {}, block: () -> Unit) {
+        val runNow: (() -> Unit)? = synchronized(this) {
             when {
-                ready -> true
-                initFailed -> return
+                ready -> block
+                initFailed -> onCancelled
                 else -> {
-                    pendingCallbacks.add(block)
-                    false
+                    pendingCallbacks.add(Pending(block, onCancelled))
+                    null
                 }
             }
         }
-        if (runNow) block()
+        runNow?.invoke()
     }
 
     /** [volume] scales this utterance only (0..1); 1.0 = engine full volume. */
@@ -154,7 +167,12 @@ class TtsManager(private val context: Context) {
         val engine = tts ?: run { Log.w(TAG, "speak DROP tts==null text=$text id=$utteranceId"); onDone(false); return }
         if (!ready) {
             Log.d(TAG, "speak QUEUED not-ready text=$text id=$utteranceId")
-            whenReady { speak(text, utteranceId, volume, onDone) }
+            whenReady(
+                onCancelled = {
+                    Log.d(TAG, "speak CANCELLED while queued text=$text id=$utteranceId")
+                    onDone(false)
+                },
+            ) { speak(text, utteranceId, volume, onDone) }
             return
         }
         // Sanitize the caller-supplied prefix so it is safe to embed in
@@ -207,22 +225,34 @@ class TtsManager(private val context: Context) {
 
     fun stop() {
         // Drain any in-flight callback so a coroutine awaiting this
-        // utterance is released (with ok=false) rather than hanging.
+        // utterance is released (with ok=false) rather than hanging, and
+        // abandon utterances still queued behind engine init: left in the
+        // queue they would fire when init completes, speaking a stale
+        // answer for a session that has already been stopped (and clobber
+        // the active-utterance tracking of any newer session).
         Log.d(TAG, "stop draining activeCallback activeId=$activeId")
+        val stale: List<Pending>
         synchronized(this) {
+            stale = pendingCallbacks.toList()
+            pendingCallbacks.clear()
             val cb = activeCallback
             activeCallback = null
             activeId = null
             cb?.invoke(false)
         }
+        stale.forEach { it.cancel() }
         tts?.stop()
     }
 
     fun release() {
+        val stale: List<Pending>
         synchronized(this) {
+            stale = pendingCallbacks.toList()
+            pendingCallbacks.clear()
             activeCallback = null
             activeId = null
         }
+        stale.forEach { it.cancel() }
         tts?.stop()
         tts?.shutdown()
         tts = null

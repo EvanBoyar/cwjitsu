@@ -116,6 +116,23 @@ class SessionOrchestrator(
 
     private var job: Job? = null
 
+    // Session generation counter, bumped by every start()/stop(). A playback
+    // job's terminal state writes are only honored while its epoch is still
+    // current: without this, the OLD job's cancellation handler (which runs
+    // whenever that coroutine next hits a suspension point, unordered with
+    // respect to anything else) could set STOPPED after a rapid stop-then-
+    // start had already put the NEW session into RUNNING, desyncing the UI
+    // from live audio. All reads/writes go through [stateLock].
+    private val stateLock = Any()
+    private var sessionEpoch = 0L
+
+    /** Set [_state] only if [epoch] is still the live session generation. */
+    private fun setStateIfCurrent(epoch: Long, value: RunnerState) {
+        synchronized(stateLock) {
+            if (epoch == sessionEpoch) _state.value = value
+        }
+    }
+
     // Reported for each item at the moment its audio starts. Held as a field
     // rather than threaded through playItem's already-long parameter list;
     // set by [start] alongside the other per-session state.
@@ -147,8 +164,9 @@ class SessionOrchestrator(
         previousRequested = false
         restartRequested = false
         lastMediaPreviousAt = 0L
+        val epoch = synchronized(stateLock) { ++sessionEpoch }
         job = scope.launch(Dispatchers.Default) {
-            _state.value = RunnerState.RUNNING
+            setStateIfCurrent(epoch, RunnerState.RUNNING)
             // Fresh session starts with a blank now-playing window.
             _nowPlaying.value = NowPlaying()
             // Live-apply settings to the engine for the whole session.
@@ -219,14 +237,14 @@ class SessionOrchestrator(
                 previousRequested = false
                 restartRequested = false
             }
-                _state.value = RunnerState.STOPPED
+                setStateIfCurrent(epoch, RunnerState.STOPPED)
             } catch (e: CancellationException) {
-                _state.value = RunnerState.STOPPED
+                setStateIfCurrent(epoch, RunnerState.STOPPED)
                 Log.d(TAG, "start CANCELED")
                 throw e
             } catch (t: Throwable) {
                 Log.e(TAG, "start FATAL uncaught", t)
-                _state.value = RunnerState.STOPPED
+                setStateIfCurrent(epoch, RunnerState.STOPPED)
             }
         }
     }
@@ -240,7 +258,10 @@ class SessionOrchestrator(
         previousRequested = false
         restartRequested = false
         lastMediaPreviousAt = 0L
-        _state.value = RunnerState.STOPPED
+        synchronized(stateLock) {
+            sessionEpoch++
+            _state.value = RunnerState.STOPPED
+        }
     }
 
     /**

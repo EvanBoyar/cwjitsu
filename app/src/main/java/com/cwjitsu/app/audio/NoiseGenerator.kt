@@ -12,7 +12,14 @@ class NoiseGenerator(
 ) {
     private var brownState: Float = 0f
 
-    /** Fill [out] starting at [offset] with [count] mono float samples in [-1, 1]. */
+    /**
+     * Fill [out] starting at [offset] with [count] mono float samples.
+     * White noise stays within +/-0.6. Brown noise's integrator state is
+     * clamped to +/-1 but the 3.5x make-up gain means peaks can exceed
+     * full scale; the audio engine's final per-sample clamp bounds the
+     * mix. Deliberately left as-is: rescaling to a strict +/-1 would
+     * change the noise character users are accustomed to.
+     */
     fun fill(out: FloatArray, offset: Int, count: Int) {
         when (type) {
             com.cwjitsu.app.practice.NoiseType.NONE -> {
