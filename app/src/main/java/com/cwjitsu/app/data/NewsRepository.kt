@@ -203,9 +203,11 @@ class NewsRepository(private val context: Context) {
             if (recentEnough) return@withContext
         }
         if (!hasNetwork()) {
+            // The cached count is on its own line in the UI, so these notes
+            // say only what the count can't: why it isn't fresher.
             setStatus(
-                message = if (poolSize() == 0) "Offline - no headlines yet."
-                          else "Offline - using saved headlines.",
+                message = if (poolSize() == 0) "Offline. Connect to download headlines."
+                          else "Offline. Using saved headlines.",
             )
             return@withContext
         }
@@ -223,7 +225,7 @@ class NewsRepository(private val context: Context) {
         if (results.all { it.second.isEmpty() }) {
             setStatus(
                 message = if (poolSize() == 0) "Couldn't load any headlines."
-                          else "Couldn't refresh - using saved headlines.",
+                          else "Couldn't refresh any feed. Using saved headlines.",
             )
             return@withContext
         }
@@ -232,11 +234,34 @@ class NewsRepository(private val context: Context) {
         // headlines, so both files need writing.
         persistCache()
         persistBag()
-        val failed = results.filter { it.second.isEmpty() }.map { it.first.name }
-        setStatus(
-            message = if (failed.isEmpty()) null
-                      else "No headlines from: ${failed.joinToString(", ")}",
-        )
+        val failed = results.filter { it.second.isEmpty() }.map { it.first }
+        // A feed that failed keeps whatever it already had cached (see
+        // [merge]), so a failure has two very different meanings and the note
+        // has to tell them apart. Reporting both as "No headlines from: X"
+        // claimed practice was broken when the offline-first path had in fact
+        // done its job and X's saved headlines were still playing.
+        val (stale, missing) = synchronized(lock) {
+            val cached = pool.mapTo(HashSet()) { it.sourceId }
+            failed.partition { it.id in cached }
+        }
+        setStatus(message = refreshNote(stale.map { it.name }, missing.map { it.name }))
+    }
+
+    /**
+     * What a refresh couldn't do, or null when it did everything. Kept
+     * deliberately narrow: the UI shows the cached headline count on its own
+     * line, so this says only what that count can't convey. [stale] sources
+     * failed but still have playable headlines; [missing] ones have nothing.
+     */
+    private fun refreshNote(stale: List<String>, missing: List<String>): String? {
+        val parts = mutableListOf<String>()
+        if (stale.isNotEmpty()) {
+            parts += "Couldn't refresh ${stale.joinToString(", ")}. Still using saved headlines."
+        }
+        if (missing.isNotEmpty()) {
+            parts += "No headlines yet from ${missing.joinToString(", ")}."
+        }
+        return parts.joinToString(" ").ifBlank { null }
     }
 
     /**
@@ -450,7 +475,7 @@ class NewsRepository(private val context: Context) {
     private suspend fun loadFromDisk() = withContext(Dispatchers.IO) {
         val file = cacheFile()
         if (!file.exists()) {
-            setStatus(message = "No headlines yet - connect and refresh.")
+            setStatus(message = "Connect and tap Refresh to download headlines.")
             return@withContext
         }
         runCatching {
@@ -502,7 +527,7 @@ class NewsRepository(private val context: Context) {
                 updatedAtMillis = o.optLong("updatedAt").takeIf { it > 0 }
             }
         }.onFailure { Log.w(TAG, "loadFromDisk failed", it) }
-        setStatus(message = if (poolSize() == 0) "No headlines yet - connect and refresh." else null)
+        setStatus(message = if (poolSize() == 0) "Connect and tap Refresh to download headlines." else null)
     }
 
     /**

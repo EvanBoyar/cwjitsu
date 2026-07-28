@@ -1243,11 +1243,27 @@ private fun NewsSettings(
             }
             TextButton(onClick = { onRefresh(true) }, enabled = !status.refreshing) { Text("Refresh") }
         }
+        // Two lines, not one. The cache state (how many headlines are ready,
+        // how fresh) is persistent; a refresh note is a transient outcome.
+        // Concatenated they read as a contradiction - "No headlines from:
+        // Gothamist · updated just now" - and the note displaced the count
+        // entirely, hiding the fact that a full pool was ready to play.
         Text(
-            text = newsStatusText(status),
+            text = newsStateText(status),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
+        // Suppressed mid-refresh: the note describes the PREVIOUS attempt,
+        // and showing it under a spinner implies it's the current result.
+        if (!status.refreshing) {
+            status.message?.let { note ->
+                Text(
+                    text = note,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
 
         // Headlines are long, so by default each one is sent once regardless
         // of the global repeat count. This switch overrides that just for news.
@@ -1371,13 +1387,18 @@ private fun CharFilterChips(
     }
 }
 
-private fun newsStatusText(s: NewsStatus): String {
-    val updated = s.updatedAtMillis?.let { " · updated ${relativeTime(it)}" } ?: ""
-    return when {
-        s.refreshing -> "Refreshing…"
-        s.message != null -> s.message + updated
-        s.headlineCount == 0 -> "No headlines cached yet."
-        else -> "${s.headlineCount} headlines cached$updated"
+/**
+ * What the cache holds right now. Always rendered, so the count never gets
+ * displaced by a refresh note - that goes on its own line. The freshness
+ * stamp rides along here rather than being appended to notes, where it
+ * produced things like "No sources selected. · updated 5 min ago".
+ */
+private fun newsStateText(s: NewsStatus): String = when {
+    s.refreshing -> "Refreshing…"
+    s.headlineCount == 0 -> "No headlines cached yet."
+    else -> {
+        val updated = s.updatedAtMillis?.let { " · updated ${relativeTime(it)}" } ?: ""
+        "${s.headlineCount} headlines cached$updated"
     }
 }
 
