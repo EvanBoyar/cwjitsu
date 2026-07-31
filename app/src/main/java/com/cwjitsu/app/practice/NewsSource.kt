@@ -88,10 +88,16 @@ object NewsSources {
  * use, so playback eligibility and cache replacement are keyed by identity,
  * not by display name (names collide: two custom feeds on one host share a
  * host label). [sourceName] is kept purely for display/logging.
+ *
+ * [fetchedAt] is when this headline was last seen in a successful fetch of
+ * its feed. Small feeds serve only a handful of items at a time, so the pool
+ * keeps recently rotated-out headlines around for a while; this stamp is
+ * what ages them out (see the merge policy in HeadlinePool).
  */
 data class Headline(
     val id: String,
     val title: String,
     val sourceId: String,
     val sourceName: String,
+    val fetchedAt: Long = 0L,
 )

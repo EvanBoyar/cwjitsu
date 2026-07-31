@@ -339,6 +339,15 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         // shuffle-bag inside the repository guarantees no near-term repeats;
         // it returns null when nothing is cached (e.g. offline first run).
         val newsItem = if (ContentKind.NEWS in current.enabledKinds) {
+            // Keep new headlines flowing during a long session: kick a
+            // background refresh each round. Non-blocking (practice never
+            // waits on the network), internally rate-limited to one real
+            // download per 10 minutes, and it fails fast offline. Without
+            // this, a session only ever saw the headlines cached before it
+            // started - small feeds rotate every half hour, so hour-long
+            // sessions replayed a frozen pool while fresh headlines sat
+            // unfetched.
+            app.news.refresh(NewsSources.all(current.customNewsFeeds))
             // Only the user's selected sources are eligible for playback,
             // even though the cache holds headlines from every feed.
             // Keyed by stable source id, not display name.
@@ -676,8 +685,25 @@ fun HomeScreen(onPickSettings: () -> Unit) {
 
             // Per-category settings: News sources + offline cache status.
             if (ContentKind.NEWS in effectiveConfig.enabledKinds) {
+                // How many cached headlines the CURRENT source selection can
+                // actually play. The cache spans every feed, so the total
+                // alone hid the real constraint: with one small source
+                // enabled, a fat cache still meant a tiny playable pool and
+                // fast repeats. Recomputed when the selection or the cache
+                // (status emission) changes.
+                val playableCount = remember(newsStatus, effectiveConfig) {
+                    app.news.eligibleCount(
+                        NewsSources
+                            .active(
+                                effectiveConfig.enabledNewsSources,
+                                effectiveConfig.customNewsFeeds,
+                            )
+                            .mapTo(mutableSetOf()) { it.id },
+                    )
+                }
                 NewsSettings(
                     status = newsStatus,
+                    playableCount = playableCount,
                     enabledSources = effectiveConfig.enabledNewsSources,
                     customFeeds = effectiveConfig.customNewsFeeds,
                     noRepeat = effectiveConfig.newsNoRepeat,
@@ -688,6 +714,7 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     onSetNoRepeat = { setNewsNoRepeat(it) },
                     onSetCharFilter = { setNewsCharFilter(it) },
                     onRefresh = { force -> refreshNews(force) },
+                    onFlush = { app.news.flushAll() },
                 )
             }
 
@@ -1212,6 +1239,7 @@ private fun CharKey(
 @Composable
 private fun NewsSettings(
     status: NewsStatus,
+    playableCount: Int,
     enabledSources: Set<String>,
     customFeeds: List<String>,
     noRepeat: Boolean,
@@ -1222,12 +1250,40 @@ private fun NewsSettings(
     onSetNoRepeat: (Boolean) -> Unit,
     onSetCharFilter: (CharFilter) -> Unit,
     onRefresh: (force: Boolean) -> Unit,
+    onFlush: () -> Unit,
 ) {
     // Warm the cache when the panel first appears (e.g. just after the user
     // enables News). Not forced: the repository skips it when the cache is
     // fresh, so screen-hopping doesn't re-download every feed. Fails fast
     // and harmlessly when offline.
     LaunchedEffect(Unit) { onRefresh(false) }
+
+    // Flushing throws away the whole cache AND the played-headline memory,
+    // which can't be undone and may leave nothing playable until the next
+    // successful download - so it hides behind an explicit confirmation.
+    var showFlushConfirm by remember { mutableStateOf(false) }
+    if (showFlushConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFlushConfirm = false },
+            title = { Text("Flush all headlines?") },
+            text = {
+                Text(
+                    "This clears every cached headline and the play history " +
+                        "that prevents repeats. Nothing will be playable " +
+                        "until the next refresh. This can't be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFlushConfirm = false
+                    onFlush()
+                }) { Text("Flush") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFlushConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -1241,6 +1297,7 @@ private fun NewsSettings(
                     strokeWidth = 2.dp,
                 )
             }
+            TextButton(onClick = { showFlushConfirm = true }, enabled = !status.refreshing) { Text("Flush") }
             TextButton(onClick = { onRefresh(true) }, enabled = !status.refreshing) { Text("Refresh") }
         }
         // Two lines, not one. The cache state (how many headlines are ready,
@@ -1249,10 +1306,21 @@ private fun NewsSettings(
         // Gothamist · updated just now" - and the note displaced the count
         // entirely, hiding the fact that a full pool was ready to play.
         Text(
-            text = newsStateText(status),
+            text = newsStateText(status, playableCount),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
+        // A small playable pool cycles fast no matter how well the draw
+        // policy spaces replays - say so, and say what actually helps.
+        if (!status.refreshing && status.headlineCount > 0 && playableCount in 1..24) {
+            Text(
+                text = "Only $playableCount headlines match your enabled " +
+                    "sources, so repeats will come around quickly. Enable " +
+                    "more sources for more variety.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+        }
         // Suppressed mid-refresh: the note describes the PREVIOUS attempt,
         // and showing it under a spinner implies it's the current result.
         if (!status.refreshing) {
@@ -1393,12 +1461,15 @@ private fun CharFilterChips(
  * stamp rides along here rather than being appended to notes, where it
  * produced things like "No sources selected. · updated 5 min ago".
  */
-private fun newsStateText(s: NewsStatus): String = when {
+private fun newsStateText(s: NewsStatus, playableCount: Int): String = when {
     s.refreshing -> "Refreshing…"
     s.headlineCount == 0 -> "No headlines cached yet."
     else -> {
         val updated = s.updatedAtMillis?.let { " · updated ${relativeTime(it)}" } ?: ""
-        "${s.headlineCount} headlines cached$updated"
+        // The playable number is the one that governs repeat spacing; the
+        // cache total spans disabled sources too, so shown alone it
+        // overstated the variety the session could actually draw from.
+        "$playableCount playable of ${s.headlineCount} cached$updated"
     }
 }
 
