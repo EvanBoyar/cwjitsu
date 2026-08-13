@@ -81,6 +81,17 @@ data class MixedConfig(
     // Only consulted when [characterGroupsEnabled] is true.
     val characterGroupMin: Int = 3,
     val characterGroupMax: Int = 5,
+    // Words: how far down the frequency-ranked list the draw reaches. Always
+    // cumulative from rank 1, so raising it widens the vocabulary rather than
+    // swapping in a harder band. Snapped to [WORD_POOL_SIZES] on load.
+    val wordPoolSize: Int = DEFAULT_WORD_POOL_SIZE,
+    // Curated lists folded in on top of the frequency pool. Amateur radio is
+    // on by default - it is what makes Words worth drilling for CW.
+    val wordSets: Set<WordSet> = DEFAULT_WORD_SETS,
+    // Share of Words rounds drawn from the enrichment sets rather than the
+    // frequency pool, split evenly among whichever sets are enabled. Ignored
+    // when [wordSets] is empty.
+    val wordEnrichmentPercent: Int = DEFAULT_WORD_ENRICHMENT_PERCENT,
     // Sub-toggles for the combined Prosigns & Q-codes category. All default
     // on so selecting the category drills everything, matching the old
     // behavior of enabling the two separate categories.
@@ -132,6 +143,32 @@ data class MixedConfig(
          * News category works out of the box once the user turns it on.
          */
         val DEFAULT_NEWS_SOURCES: Set<String> = setOf("npr", "bbc")
+
+        /**
+         * Vocabulary settings for the Words category, as ranks into the
+         * frequency-ordered word list. Each is cumulative from rank 1.
+         */
+        val WORD_POOL_SIZES: List<Int> = listOf(100, 500, 1000, 2500, 5000)
+
+        /** Middle stop: broad enough to be interesting, narrow enough to learn. */
+        const val DEFAULT_WORD_POOL_SIZE: Int = 1000
+
+        /** Selectable shares of rounds drawn from the enrichment sets. */
+        val WORD_ENRICHMENT_PERCENTS: List<Int> = listOf(10, 20, 30, 40, 50)
+
+        const val DEFAULT_WORD_ENRICHMENT_PERCENT: Int = 30
+
+        /** Amateur radio only; the rest are opt-in. */
+        val DEFAULT_WORD_SETS: Set<WordSet> = setOf(WordSet.RADIO)
+
+        /** Snap an arbitrary saved value onto the nearest legal stop. */
+        fun nearestWordPoolSize(value: Int): Int =
+            WORD_POOL_SIZES.minByOrNull { kotlin.math.abs(it - value) } ?: DEFAULT_WORD_POOL_SIZE
+
+        /** Snap an arbitrary saved value onto the nearest legal stop. */
+        fun nearestWordEnrichmentPercent(value: Int): Int =
+            WORD_ENRICHMENT_PERCENTS.minByOrNull { kotlin.math.abs(it - value) }
+                ?: DEFAULT_WORD_ENRICHMENT_PERCENT
     }
 }
 

@@ -356,6 +356,22 @@ object CallsignRegistry {
     fun byName(name: String): CallsignCountry? = countries.firstOrNull { it.name == name }
 
     /**
+     * Every distinct prefix the registry can emit, sorted. Backs the
+     * "Callsign prefixes" word set, so what the Words category drills is by
+     * construction the same set the Callsigns category generates rather
+     * than a second list that can drift away from this one.
+     *
+     * ITU Generic's empty prefix is excluded: it means "no prefix", which is
+     * not something that can be sent as a practice item.
+     */
+    val allPrefixes: List<String> = countries
+        .flatMap { it.templates }
+        .map { it.prefix }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .sorted()
+
+    /**
      * Group the registry by region, preserving the declaration order
      * within each region. Used by the country-picker dialog.
      */

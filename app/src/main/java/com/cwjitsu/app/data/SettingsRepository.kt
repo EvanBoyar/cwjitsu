@@ -22,6 +22,7 @@ import com.cwjitsu.app.practice.NoiseType
 import com.cwjitsu.app.practice.PracticeConfig
 import com.cwjitsu.app.practice.SpokenAnswerMode
 import com.cwjitsu.app.practice.SloppyMode
+import com.cwjitsu.app.practice.WordSet
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
@@ -277,6 +278,20 @@ class SettingsRepository(private val context: Context) {
         o.put("characterGroupsEnabled", config.characterGroupsEnabled)
         o.put("characterGroupMin", config.characterGroupMin)
         o.put("characterGroupMax", config.characterGroupMax)
+        // Words: vocabulary depth, which curated sets are folded in, and how
+        // much of the draw they take. Sets are persisted in declaration order
+        // so the saved value is stable.
+        o.put("wordPoolSize", config.wordPoolSize)
+        val wordSets = JSONArray()
+        for (set in WordSet.entries) {
+            if (set in config.wordSets) wordSets.put(set.name)
+        }
+        o.put("wordSets", wordSets)
+        // Marks that wordSets is present and authoritative, so an empty array
+        // reads as "the user turned everything off" rather than "saved before
+        // this feature existed" - see the parse side.
+        o.put("wordSetsV1", true)
+        o.put("wordEnrichmentPercent", config.wordEnrichmentPercent)
         // Sub-toggles for the combined Prosigns & Q-codes category.
         o.put("prosignsEnabled", config.prosignsEnabled)
         o.put("qcodesEnabled", config.qcodesEnabled)
@@ -369,6 +384,24 @@ class SettingsRepository(private val context: Context) {
         // Abbreviations arrived after the combined card; absent key means a
         // config saved before the feature - default on so it's discoverable.
         val abbreviationsEnabled = o.optBoolean("abbreviationsEnabled", true)
+        // Words: absent keys mean a config saved before the vocabulary
+        // slider existed - fall back to the defaults. Saved sizes/percentages
+        // are snapped onto a legal stop so a value written by an older or
+        // newer build can never leave the slider off its track.
+        val wordPoolSize = MixedConfig.nearestWordPoolSize(
+            o.optInt("wordPoolSize", MixedConfig.DEFAULT_WORD_POOL_SIZE)
+        )
+        val wordSets = if (o.optBoolean("wordSetsV1", false)) {
+            val a = o.optJSONArray("wordSets") ?: JSONArray()
+            (0 until a.length())
+                .mapNotNull { i -> WordSet.entries.firstOrNull { it.name == a.optString(i) } }
+                .toSet()
+        } else {
+            MixedConfig.DEFAULT_WORD_SETS
+        }
+        val wordEnrichmentPercent = MixedConfig.nearestWordEnrichmentPercent(
+            o.optInt("wordEnrichmentPercent", MixedConfig.DEFAULT_WORD_ENRICHMENT_PERCENT)
+        )
         // News sources: absent means a pre-News config - seed the defaults.
         val enabledNewsSources = if (o.has("enabledNewsSources")) {
             val a = o.optJSONArray("enabledNewsSources") ?: JSONArray()
@@ -420,6 +453,9 @@ class SettingsRepository(private val context: Context) {
             characterGroupsEnabled = characterGroupsEnabled,
             characterGroupMin = characterGroupMin,
             characterGroupMax = characterGroupMax,
+            wordPoolSize = wordPoolSize,
+            wordSets = wordSets,
+            wordEnrichmentPercent = wordEnrichmentPercent,
             prosignsEnabled = prosignsEnabled,
             qcodesEnabled = qcodesEnabled,
             abbreviationsEnabled = abbreviationsEnabled,

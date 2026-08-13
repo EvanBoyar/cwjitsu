@@ -82,7 +82,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cwjitsu.app.CWJitsuApp
 import com.cwjitsu.app.R
 import com.cwjitsu.app.data.NewsStatus
-import com.cwjitsu.app.data.WordDictionary
 import com.cwjitsu.app.practice.CallsignCountry
 import com.cwjitsu.app.practice.CallsignRegistry
 import com.cwjitsu.app.practice.CharFilter
@@ -90,7 +89,10 @@ import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.ContentMixer
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.ContentItem
+import com.cwjitsu.app.practice.Draw
+import com.cwjitsu.app.practice.DrawKind
 import com.cwjitsu.app.practice.Morse
+import com.cwjitsu.app.practice.WordSet
 import com.cwjitsu.app.practice.NewsSource
 import com.cwjitsu.app.practice.NewsSources
 import com.cwjitsu.app.practice.PracticeConfig
@@ -98,13 +100,16 @@ import com.cwjitsu.app.practice.SpokenAnswerMode
 import com.cwjitsu.app.service.ContentRegenerator
 import com.cwjitsu.app.service.SessionOrchestrator
 import com.cwjitsu.app.ui.components.DragOnlyRangeSlider
+import com.cwjitsu.app.ui.components.DragOnlySlider
 import com.cwjitsu.app.ui.components.PlaybackControls
 import com.cwjitsu.app.ui.components.ToggleRow
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The Home screen is the app's only practice surface. It hosts the
@@ -238,6 +243,26 @@ fun HomeScreen(onPickSettings: () -> Unit) {
         }
     }
 
+    fun setWordPoolSize(size: Int) {
+        scope.launch { app.settings.updateMixedConfig { it.copy(wordPoolSize = size) } }
+    }
+
+    fun toggleWordSet(set: WordSet) {
+        scope.launch {
+            app.settings.updateMixedConfig {
+                it.copy(
+                    wordSets = if (set in it.wordSets) it.wordSets - set else it.wordSets + set,
+                )
+            }
+        }
+    }
+
+    fun setWordEnrichmentPercent(percent: Int) {
+        scope.launch {
+            app.settings.updateMixedConfig { it.copy(wordEnrichmentPercent = percent) }
+        }
+    }
+
     // The shared refresh rules (enabled-check, all-feeds download, rate
     // limit) live in CWJitsuApp.refreshNewsIfEnabled. force=true is for the
     // explicit Refresh button and newly-added feeds; automatic triggers
@@ -334,7 +359,10 @@ fun HomeScreen(onPickSettings: () -> Unit) {
 
     val regenerator: ContentRegenerator = { cfg ->
         val current = app.settings.mixedConfigFlow.first() ?: MixedConfig()
-        val words = WordDictionary.get(app)
+        // Re-point the word bags at whatever the vocabulary slider and
+        // enrichment chips currently say. A no-op when nothing changed, so
+        // this is safe to run every round and picks up mid-session edits.
+        if (ContentKind.WORDS in current.enabledKinds) app.words.configure(current)
         // Pull one headline per round from the offline-first news cache. The
         // shuffle-bag inside the repository guarantees no near-term repeats;
         // it returns null when nothing is cached (e.g. offline first run).
@@ -363,13 +391,13 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                     singleShot = current.newsNoRepeat,
                     // Confirmed via onItemStarted below once it actually
                     // plays; the draw alone doesn't consume it.
-                    newsId = h.id,
+                    draw = Draw(DrawKind.NEWS, h.id),
                 )
             }
         } else null
         ContentMixer.build(
             enabledKinds = current.enabledKinds,
-            words = words,
+            wordSource = { app.words.next() },
             shorthandMode = cfg.shorthandSpokenMode,
             nato = cfg.natoSpokenAnswers,
             callsignCountries = current.callsignCountries,
@@ -491,14 +519,24 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                                 // not when the round that contains it was
                                 // generated - that round may never get there.
                                 onItemStarted = { item ->
-                                    item.newsId?.let { app.news.markPlayed(it) }
+                                    when (item.draw?.kind) {
+                                        DrawKind.NEWS -> app.news.markPlayed(item.draw.key)
+                                        DrawKind.WORD -> app.words.markPlayed(item.draw.key)
+                                        null -> Unit
+                                    }
                                 },
                             )
                             isPaused -> orchestrator.resume()
                             else -> orchestrator.pause()
                         }
                     },
-                    onStop = { orchestrator.stop() },
+                    onStop = {
+                        orchestrator.stop()
+                        // Word-bag writes are debounced; make sure the tail of
+                        // the session reaches disk rather than waiting out the
+                        // window in a process that may be reclaimed.
+                        app.words.flush()
+                    },
                     onPrevious = { orchestrator.previous() },
                     onRestart = { orchestrator.restart() },
                     onNext = { orchestrator.skip() },
@@ -681,6 +719,36 @@ fun HomeScreen(onPickSettings: () -> Unit) {
                         )
                     }
                 }
+            }
+
+            // Per-category settings: how deep into the frequency-ranked
+            // vocabulary the Words category reaches, and which curated sets
+            // are folded in on top of it.
+            if (ContentKind.WORDS in effectiveConfig.enabledKinds) {
+                // The word-list assets are parsed off the main thread, so the
+                // first composition can run before there is anything to
+                // count. Flipping this flag when the parse finishes is what
+                // re-reads the sizes; without it the chips would sit on
+                // zero until some unrelated edit forced a recomposition.
+                var wordsLoaded by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    withContext(Dispatchers.IO) { app.words.ensureLoaded() }
+                    wordsLoaded = true
+                }
+                val wordCounts = remember(wordsLoaded) {
+                    WordSet.entries.associateWith { app.words.countIn(it) }
+                }
+                WordSettings(
+                    poolSize = effectiveConfig.wordPoolSize,
+                    sets = effectiveConfig.wordSets,
+                    enrichmentPercent = effectiveConfig.wordEnrichmentPercent,
+                    countIn = { wordCounts[it] ?: 0 },
+                    wordsIn = { app.words.wordsIn(it) },
+                    topWords = { app.words.frequencyWords(it) },
+                    onSetPoolSize = { setWordPoolSize(it) },
+                    onToggleSet = { toggleWordSet(it) },
+                    onSetEnrichmentPercent = { setWordEnrichmentPercent(it) },
+                )
             }
 
             // Per-category settings: News sources + offline cache status.
@@ -961,6 +1029,227 @@ private fun CharacterGroupRangeSlider(
             valueRange = bounds.first.toFloat()..bounds.last.toFloat(),
             steps = bounds.last - bounds.first - 1,
         )
+    }
+}
+
+/**
+ * Settings for the Words category: how far down the frequency-ranked list
+ * the draw reaches, and which curated sets ride along on top of it.
+ *
+ * The panel is deliberately explicit about what is in the pool: every set
+ * carries its size on the chip, the summary line names each contributing
+ * list, and "View words" shows the actual contents. There is no total across
+ * the lists, because they overlap on purpose and any sum would overstate the
+ * real number of distinct words.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WordSettings(
+    poolSize: Int,
+    sets: Set<WordSet>,
+    enrichmentPercent: Int,
+    countIn: (WordSet) -> Int,
+    wordsIn: (WordSet) -> List<String>,
+    topWords: (Int) -> List<String>,
+    onSetPoolSize: (Int) -> Unit,
+    onToggleSet: (WordSet) -> Unit,
+    onSetEnrichmentPercent: (Int) -> Unit,
+) {
+    var showLists by rememberSaveable { mutableStateOf(false) }
+    val sizes = MixedConfig.WORD_POOL_SIZES
+    val percents = MixedConfig.WORD_ENRICHMENT_PERCENTS
+    val sizeIndex = sizes.indexOf(poolSize).takeIf { it >= 0 }
+        ?: sizes.indexOf(MixedConfig.DEFAULT_WORD_POOL_SIZE)
+    val percentIndex = percents.indexOf(enrichmentPercent).takeIf { it >= 0 }
+        ?: percents.indexOf(MixedConfig.DEFAULT_WORD_ENRICHMENT_PERCENT)
+    val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+
+    Text("Words", style = MaterialTheme.typography.titleMedium)
+
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Vocabulary",
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Text("Top ${"%,d".format(poolSize)}", style = MaterialTheme.typography.labelLarge)
+    }
+    DragOnlySlider(
+        value = sizeIndex.toFloat(),
+        onValueChange = { onSetPoolSize(sizes[it.roundToInt().coerceIn(0, sizes.lastIndex)]) },
+        valueRange = 0f..sizes.lastIndex.toFloat(),
+        steps = sizes.size - 2,
+    )
+    Text(
+        "The ${"%,d".format(poolSize)} most common English words. Every one of them " +
+            "is sent before any starts repeating, and your place is kept between sessions.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = dim,
+    )
+
+    Text(
+        "Also include",
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        WordSet.entries.forEach { set ->
+            FilterChip(
+                selected = set in sets,
+                onClick = { onToggleSet(set) },
+                label = { Text("${set.label}  ${countIn(set)}") },
+            )
+        }
+    }
+
+    if (sets.isNotEmpty()) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Enrichment",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text("$enrichmentPercent%", style = MaterialTheme.typography.labelLarge)
+        }
+        DragOnlySlider(
+            value = percentIndex.toFloat(),
+            onValueChange = {
+                onSetEnrichmentPercent(percents[it.roundToInt().coerceIn(0, percents.lastIndex)])
+            },
+            valueRange = 0f..percents.lastIndex.toFloat(),
+            steps = percents.size - 2,
+        )
+        Text(
+            "$enrichmentPercent% of words come from the ${sets.size} " +
+                (if (sets.size == 1) "list" else "lists") +
+                " above, split evenly. The rest come from the common words.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = dim,
+        )
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = buildString {
+                append("Top ${"%,d".format(poolSize)} common")
+                for (set in WordSet.entries) {
+                    if (set in sets) append(" · ${set.label} ${countIn(set)}")
+                }
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = dim,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { showLists = true }) { Text("View words") }
+    }
+    if (sets.isNotEmpty()) {
+        Text(
+            "The lists overlap on purpose, so words like RADIO and POWER still " +
+                "turn up in the common words whether or not you add a list here.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = dim,
+        )
+    }
+
+    if (showLists) {
+        WordListDialog(
+            poolSize = poolSize,
+            countIn = countIn,
+            wordsIn = wordsIn,
+            topWords = topWords,
+            onDismiss = { showLists = false },
+        )
+    }
+}
+
+/**
+ * Shows the actual contents of every list the Words category can draw from,
+ * one at a time. Exists so "what am I practicing?" is answerable from the
+ * app rather than by reading the assets.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun WordListDialog(
+    poolSize: Int,
+    countIn: (WordSet) -> Int,
+    wordsIn: (WordSet) -> List<String>,
+    topWords: (Int) -> List<String>,
+    onDismiss: () -> Unit,
+) {
+    // null selects the frequency-ranked list, which has no WordSet of its own.
+    var selected by remember { mutableStateOf<WordSet?>(null) }
+    val words = remember(selected, poolSize) {
+        selected?.let(wordsIn) ?: topWords(poolSize)
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            topBar = {
+                TopAppBar(
+                    title = { Text("Practice words") },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close")
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars),
+            ) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    FilterChip(
+                        selected = selected == null,
+                        onClick = { selected = null },
+                        label = { Text("Common  ${"%,d".format(poolSize)}") },
+                    )
+                    WordSet.entries.forEach { set ->
+                        FilterChip(
+                            selected = selected == set,
+                            onClick = { selected = set },
+                            label = { Text("${set.label}  ${countIn(set)}") },
+                        )
+                    }
+                }
+                Text(
+                    text = if (selected == null) {
+                        "In frequency order, most common first."
+                    } else {
+                        "Every one of these is equally likely."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(words) { word ->
+                        Text(
+                            word,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -200,21 +200,38 @@ class AbbreviationContentGenerator(
 }
 
 /**
- * Word generator: pulls random English words from a bundled list.
- * Words are always spoken as themselves; the NATO toggle does not apply.
+ * Supplies the next practice word. Backed at runtime by the shuffle bags in
+ * [com.cwjitsu.app.data.WordPool], which deal every word in the pool once
+ * before repeating any; tests pass a plain lambda.
+ *
+ * Returns null when no words are loaded at all - the generator then emits
+ * nothing, matching how an empty character pool behaves.
+ */
+fun interface WordSource {
+    fun next(): String?
+}
+
+/**
+ * Word generator: pulls words from [source], which draws without
+ * replacement. Words are always spoken as themselves; the NATO toggle does
+ * not apply.
+ *
+ * The draw is provisional - see [Draw]. The emitted item carries the word
+ * back so the bag can be advanced once the item actually plays.
  */
 class WordContentGenerator(
-    private val words: List<String>,
-    private val random: Random = Random.Default,
+    private val source: WordSource,
 ) {
-    fun batch(count: Int): List<ContentItem> {
-        // An empty dictionary (e.g. asset failed to load) emits nothing,
-        // matching how an empty character pool behaves, instead of
-        // crashing random() on an empty collection.
-        if (words.isEmpty()) return emptyList()
-        return List(count) { words.random(random) }
-            .map { ContentItem(text = it.uppercase(), spokenAnswer = it.lowercase()) }
-    }
+    fun batch(count: Int): List<ContentItem> =
+        List(count) { source.next() }
+            .filterNotNull()
+            .map { word ->
+                ContentItem(
+                    text = word.uppercase(),
+                    spokenAnswer = word.lowercase(),
+                    draw = Draw(DrawKind.WORD, word),
+                )
+            }
 }
 
 /**

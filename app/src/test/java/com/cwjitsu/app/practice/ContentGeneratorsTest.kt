@@ -70,17 +70,25 @@ class ContentGeneratorsTest {
     }
 
     @Test
-    fun `word generator with an empty dictionary emits nothing`() {
-        assertTrue(WordContentGenerator(emptyList(), Random(9)).batch(5).isEmpty())
+    fun `word generator with an exhausted source emits nothing`() {
+        assertTrue(WordContentGenerator { null }.batch(5).isEmpty())
     }
 
     @Test
     fun `word generator uppercases the sent text and speaks the word`() {
-        val items = WordContentGenerator(listOf("hello"), Random(6)).batch(3)
+        val items = WordContentGenerator { "hello" }.batch(3)
         for (item in items) {
             assertEquals("HELLO", item.text)
             assertEquals("hello", item.spokenAnswer)
         }
+    }
+
+    @Test
+    fun `word generator carries the draw so the bag can be confirmed on play`() {
+        val items = WordContentGenerator { "hello" }.batch(1)
+        // The key is the word itself, and it is the UNCHANGED word, not the
+        // uppercased display text - the bag's pool holds the raw entries.
+        assertEquals(Draw(DrawKind.WORD, "hello"), items.single().draw)
     }
 
     @Test

@@ -16,7 +16,7 @@ object ContentMixer {
 
     fun build(
         enabledKinds: Set<ContentKind>,
-        words: List<String>,
+        wordSource: WordSource = WordSource { null },
         shorthandMode: SpokenAnswerMode = SpokenAnswerMode.BOTH,
         nato: Boolean = true,
         callsignCountries: Set<String> = MixedConfig.DEFAULT_COUNTRIES,
@@ -74,7 +74,7 @@ object ContentMixer {
                         out.addAll(AbbreviationContentGenerator(spokenMode = shorthandMode).batch(1, nato))
                     }
                 }
-                ContentKind.WORDS -> out.addAll(WordContentGenerator(words).batch(1))
+                ContentKind.WORDS -> out.addAll(WordContentGenerator(wordSource).batch(1))
                 ContentKind.TEXT -> {
                     if (textSource.isNotBlank()) {
                         out.addAll(

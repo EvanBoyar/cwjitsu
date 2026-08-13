@@ -11,6 +11,7 @@ import com.cwjitsu.app.data.NewsRefreshWorker
 import com.cwjitsu.app.data.NewsRepository
 import com.cwjitsu.app.data.SettingsRepository
 import com.cwjitsu.app.data.UpdateChecker
+import com.cwjitsu.app.data.WordPool
 import com.cwjitsu.app.practice.ContentKind
 import com.cwjitsu.app.practice.MixedConfig
 import com.cwjitsu.app.practice.NewsSources
@@ -32,6 +33,7 @@ class CWJitsuApp : Application() {
     val audioEngine: CwAudioEngine by lazy { CwAudioEngine() }
     val ttsManager: TtsManager by lazy { TtsManager(applicationContext) }
     val news: NewsRepository by lazy { NewsRepository(applicationContext) }
+    val words: WordPool by lazy { WordPool(applicationContext) }
     val updateChecker: UpdateChecker by lazy { UpdateChecker() }
 
     // Global orchestrator that survives screen navigation as long as the app

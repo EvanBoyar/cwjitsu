@@ -33,11 +33,24 @@ data class ContentItem(
     // exactly once. Used for long items (e.g. a news headline) where hearing
     // the whole thing repeated would be tedious.
     val singleShot: Boolean = false,
-    // For content drawn without replacement, the key identifying the draw, so
-    // it can be confirmed once the item actually reaches the speaker. Rounds
-    // are generated a whole batch at a time and can be abandoned before every
-    // item plays, so drawing and playing are not the same event. Only news
-    // headlines set this (see NewsRepository.markPlayed); everything else is
-    // generated fresh each round and has nothing to confirm.
-    val newsId: String? = null,
+    // Set only for content drawn without replacement; null for everything
+    // generated fresh each round, which has nothing to confirm.
+    val draw: Draw? = null,
 )
+
+/** Which pool a [Draw] came from, and so which bag confirms it. */
+enum class DrawKind { NEWS, WORD }
+
+/**
+ * A provisional draw from a no-replacement pool, carried on the
+ * [ContentItem] until the item actually reaches the speaker.
+ *
+ * Rounds are built one ahead of playback and can be abandoned, so drawing
+ * and playing are not the same event: consuming at draw time would silently
+ * skip content the user never heard. The orchestrator's onItemStarted hook
+ * confirms the draw at the moment the code starts going out.
+ *
+ * [key] is whatever the owning bag needs to identify the draw - a headline
+ * id for [DrawKind.NEWS], the word itself for [DrawKind.WORD].
+ */
+data class Draw(val kind: DrawKind, val key: String)

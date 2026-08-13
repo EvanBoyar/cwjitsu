@@ -6,7 +6,11 @@ import org.junit.Test
 
 class ContentMixerTest {
 
-    private val words = listOf("hello", "world")
+    // A cycling stub for the word source: enough to prove the mixer asks for
+    // one word per round, without pulling in the real shuffle bags.
+    private val wordPool = listOf("hello", "world")
+    private var wordIndex = 0
+    private val words = WordSource { wordPool[wordIndex++ % wordPool.size] }
 
     @Test
     fun `no enabled kinds means no items`() {
@@ -54,8 +58,8 @@ class ContentMixerTest {
     }
 
     @Test
-    fun `empty word list emits nothing rather than crashing`() {
-        val items = ContentMixer.build(setOf(ContentKind.WORDS), emptyList())
+    fun `an exhausted word source emits nothing rather than crashing`() {
+        val items = ContentMixer.build(setOf(ContentKind.WORDS), WordSource { null })
         assertTrue(items.isEmpty())
     }
 
@@ -101,7 +105,11 @@ class ContentMixerTest {
 
     @Test
     fun `news kind emits the provided headline and nothing without one`() {
-        val headline = ContentItem(text = "TEST HEADLINE", singleShot = true, newsId = "x")
+        val headline = ContentItem(
+            text = "TEST HEADLINE",
+            singleShot = true,
+            draw = Draw(DrawKind.NEWS, "x"),
+        )
         val with = ContentMixer.build(setOf(ContentKind.NEWS), words, newsItem = headline)
         assertEquals(listOf(headline), with)
         val without = ContentMixer.build(setOf(ContentKind.NEWS), words, newsItem = null)
