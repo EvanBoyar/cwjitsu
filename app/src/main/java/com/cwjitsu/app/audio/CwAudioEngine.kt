@@ -383,18 +383,21 @@ class CwAudioEngine(
                         continue
                     }
                 }
-                // A silent idle can last forever: a user pause (which can
-                // land in ANY engine state, since between sounds the state
-                // is STOPPED, not PAUSED) or an orphaned session. Streaming
-                // zero blocks through it keeps the audio pipeline awake
-                // indefinitely, so park the track instead: immediately on a
-                // user pause, or after IDLE_PARK_AFTER_MS of continuous
-                // silence as a backstop for any other unbounded idle. The
-                // short between-sound gaps of a playing session stay well
-                // under the backstop, so normal playback keeps its warm
-                // track.
+                // An idle can last forever: a user pause (which can land in
+                // ANY engine state, since between sounds the state is
+                // STOPPED, not PAUSED) or an orphaned session. Streaming
+                // through it keeps the audio pipeline awake indefinitely, so
+                // park the track instead. A user pause parks unconditionally
+                // - paused means silent, so the noise bed stops too, and the
+                // pipeline can sleep for however long the pause lasts. The
+                // IDLE_PARK_AFTER_MS backstop additionally catches any other
+                // unbounded idle, but only when nothing is audible: an
+                // unpaused session with a noise bed is deliberately making
+                // sound. The short between-sound gaps of a playing session
+                // stay well under the backstop, so normal playback keeps its
+                // warm track.
                 val silentIdle = !noiseAudible(cfg)
-                if (silentIdle && (userPaused || idleSilentBlocks >= idleParkBlocks)) {
+                if (userPaused || (silentIdle && idleSilentBlocks >= idleParkBlocks)) {
                     idleSilentBlocks = 0
                     parkTrack(track)
                     continue
@@ -475,19 +478,21 @@ class CwAudioEngine(
         cfg.noiseType != NoiseType.NONE && cfg.noiseVolume > 0f
 
     /**
-     * Pause the AudioTrack for the duration of a silent idle (user pause,
-     * or the idle backstop) so the audio HAL can sleep, then re-warm it
-     * when there is something to render again. Event-driven: the worker
-     * waits on [lock] and is woken by [play], [resume], [updateConfig] and
+     * Pause the AudioTrack for the duration of an idle (user pause, or the
+     * idle backstop) so the audio HAL can sleep, then re-warm it when there
+     * is something to render again. Event-driven: the worker waits on
+     * [lock] and is woken by [play], [resume], [updateConfig] and
      * [teardown]; the timed wait is only a safety net against a lost
-     * wakeup. Exits when the session tears down, a schedule starts
-     * playing, or a noise bed becomes audible.
+     * wakeup. Exits when the session tears down, a schedule starts playing,
+     * or a noise bed becomes audible - except during a user pause, which
+     * keeps the park (paused means silent, noise bed included); the noise
+     * resumes with the rest of the audio on [resume].
      */
     private fun parkTrack(track: AudioTrack) {
         try { track.pause() } catch (_: IllegalStateException) { return }
         synchronized(lock) {
             while (sessionRunning && _state.value != State.PLAYING &&
-                !noiseAudible(curConfig)
+                (userPaused || !noiseAudible(curConfig))
             ) {
                 try { lock.wait(1_000) } catch (_: InterruptedException) { return }
             }
