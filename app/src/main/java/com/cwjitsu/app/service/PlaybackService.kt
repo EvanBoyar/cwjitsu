@@ -191,6 +191,15 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // This foreground service is what makes background audio legitimate;
+        // once it goes away (task swiped while paused, notification
+        // dismissed, system stop) nothing should keep generating audio. The
+        // orchestrator and engine live in the Application object, so without
+        // this a paused session outlives the service as an invisible cached
+        // process whose audio worker never stops.
+        if (app.orchestrator.runnerState.value == SessionOrchestrator.RunnerState.RUNNING) {
+            app.orchestrator.stop()
+        }
         scope.cancel()
         session?.release()
         player?.release()

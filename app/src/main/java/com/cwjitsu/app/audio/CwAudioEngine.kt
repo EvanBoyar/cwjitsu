@@ -24,6 +24,10 @@ import kotlin.math.sin
  * make the very short courtesy pip vanish intermittently. On a warm track
  * there is no cold start, so every sound (long code or short pip) is heard in
  * full, with no sacrificial-silence guesswork.
+ *
+ * The warmth is bounded: on a user pause, and after [IDLE_PARK_AFTER_MS] of
+ * continuous silence, the worker parks the track (see [parkTrack]) so an
+ * idle session cannot stream zeros indefinitely and burn battery.
  */
 class CwAudioEngine(
     val sampleRate: Int = 44_100,
@@ -55,10 +59,23 @@ class CwAudioEngine(
         // Pause freezes the sine mid-cycle, so continuing it would snap in
         // from silence at a nonzero amplitude and pop. Fits within one block.
         private const val RESUME_FADE_MS = 8
+
+        // While the session is idle (no schedule playing, no audible noise
+        // bed), keep the track warm for at most this long, then park it.
+        // This bounds the keep-warm model: without a cap, any state that
+        // leaves the engine idle indefinitely (a pause that landed between
+        // sounds, a session loop that died without stopping the engine)
+        // streams silence forever, which keeps audioserver and the audio
+        // HAL awake, blocks the cached-app freezer, and visibly drains the
+        // battery overnight. 30 s is far longer than any between-sound gap
+        // a running session produces, so normal playback never pays the
+        // (already declick-guarded) re-warm on unpark.
+        private const val IDLE_PARK_AFTER_MS = 30_000
     }
 
-    // Session-level track + worker. Guarded by [lock] for lifecycle.
-    private val lock = Any()
+    // Session-level track + worker. Guarded by [lock] for lifecycle. A plain
+    // Object (not Any) so the parked worker can wait()/notifyAll() on it.
+    private val lock = Object()
     private var track: AudioTrack? = null
     private var worker: Thread? = null
     @Volatile private var sessionRunning = false
@@ -76,6 +93,17 @@ class CwAudioEngine(
     // finalizes to STOPPED. Kept separate from a plain stop so an abort with
     // no active tone still cuts instantly.
     @Volatile private var abortRequested = false
+
+    // User-level pause, tracked independently of [State]: the engine is
+    // usually STOPPED between sounds (TTS answers, inter-item delays), and a
+    // pause arriving then used to be invisible to the worker, which kept
+    // streaming silence for the whole pause - unbounded battery drain when a
+    // paused session is left overnight. The worker parks the track whenever
+    // this is set (and no noise bed is audible), regardless of State.
+    // Cleared by [resume] and by [play]: play only ever happens when the
+    // session is actually unpaused, so it self-heals paths (skip/previous)
+    // that clear the orchestrator's pause without calling [resume].
+    @Volatile private var userPaused = false
 
     /**
      * Install the schedule to be played by the next [play] call. Deliberately
@@ -109,6 +137,9 @@ class CwAudioEngine(
                 curNoise = NoiseGenerator(config.noiseType)
             }
             curConfig = config
+            // A parked worker re-checks the noise bed on wake: turning noise
+            // on mid-pause should un-park and start rendering it.
+            lock.notifyAll()
         }
     }
 
@@ -119,12 +150,19 @@ class CwAudioEngine(
             playPos = 0L
             samplesElapsed = 0L
             abortRequested = false
+            userPaused = false
             ensureSessionStartedLocked()
             _state.value = State.PLAYING
+            // Wake a worker parked on an idle/paused track.
+            lock.notifyAll()
         }
     }
 
     fun pause() {
+        // Record the pause even when no tone is in flight (State STOPPED
+        // between sounds): the worker parks on [userPaused], not on State,
+        // so a pause always stops the silence stream.
+        userPaused = true
         if (_state.value == State.PLAYING) _state.value = State.PAUSED
     }
 
@@ -133,7 +171,9 @@ class CwAudioEngine(
         // tone back in only if it had actually gone silent (see toneLive in
         // pumpLoop) - so a pause too brief to interrupt the tone doesn't get a
         // spurious fade-in (which would itself click).
+        userPaused = false
         if (_state.value == State.PAUSED) _state.value = State.PLAYING
+        synchronized(lock) { lock.notifyAll() }
     }
 
     /**
@@ -184,6 +224,10 @@ class CwAudioEngine(
             playPos = 0L
             samplesElapsed = 0L
             abortRequested = false
+            userPaused = false
+            // Release a worker parked on the (now dead) session so the
+            // join below doesn't have to ride out its wait timeout.
+            lock.notifyAll()
         }
         // Join outside the lock so the worker (which may briefly take the
         // lock to snapshot state) can finish its current block and exit.
@@ -239,6 +283,15 @@ class CwAudioEngine(
         val block = FloatArray(blockSize)
         val noiseBuf = FloatArray(blockSize)
         val pcm = ShortArray(blockSize)
+
+        // Consecutive pure-silence idle blocks written (no tone, no noise).
+        // Once they add up to IDLE_PARK_AFTER_MS the worker parks the track
+        // instead of streaming zeros: the warm track only earns its cost
+        // across the short gaps inside a playing session.
+        var idleSilentBlocks = 0
+        val idleParkBlocks =
+            (IDLE_PARK_AFTER_MS.toLong() * sampleRate / 1000 / blockSize)
+                .toInt().coerceAtLeast(1)
 
         // One-time cold-start pre-roll so the first real tone isn't clipped.
         repeat(PREROLL_BLOCKS) {
@@ -330,16 +383,23 @@ class CwAudioEngine(
                         continue
                     }
                 }
-                // A user-level pause with no noise bed can last hours; keep
-                // mixing zero blocks and the audio pipeline never sleeps.
-                // Park the track instead and poll cheaply until resumed.
-                // Short between-item idles (TTS, delays) never enter here
-                // because their engine state is STOPPED, not PAUSED - so the
-                // warm-track guarantee for normal playback is untouched.
-                if (_state.value == State.PAUSED && !noiseAudible(cfg)) {
-                    idleWhilePaused(track)
+                // A silent idle can last forever: a user pause (which can
+                // land in ANY engine state, since between sounds the state
+                // is STOPPED, not PAUSED) or an orphaned session. Streaming
+                // zero blocks through it keeps the audio pipeline awake
+                // indefinitely, so park the track instead: immediately on a
+                // user pause, or after IDLE_PARK_AFTER_MS of continuous
+                // silence as a backstop for any other unbounded idle. The
+                // short between-sound gaps of a playing session stay well
+                // under the backstop, so normal playback keeps its warm
+                // track.
+                val silentIdle = !noiseAudible(cfg)
+                if (silentIdle && (userPaused || idleSilentBlocks >= idleParkBlocks)) {
+                    idleSilentBlocks = 0
+                    parkTrack(track)
                     continue
                 }
+                idleSilentBlocks = if (silentIdle) idleSilentBlocks + 1 else 0
                 renderNoiseOnly(noiseBuf, pcm, cfg, ns)
                 if (track.write(pcm, 0, blockSize, AudioTrack.WRITE_BLOCKING) < 0) {
                     // A dead track returns its error immediately, so without
@@ -369,6 +429,7 @@ class CwAudioEngine(
                 break
             }
             toneLive = true
+            idleSilentBlocks = 0
             liveSched = sched
             livePos = pos + blockSize
 
@@ -414,18 +475,22 @@ class CwAudioEngine(
         cfg.noiseType != NoiseType.NONE && cfg.noiseVolume > 0f
 
     /**
-     * Pause the AudioTrack for the duration of a noise-free user pause so
-     * the audio HAL can sleep, then re-warm it on resume. A 50 ms poll while
-     * parked is orders of magnitude cheaper than mixing 43 blocks of zeros
-     * per second. Exits early if the session tears down or the user turns
-     * a noise bed on mid-pause.
+     * Pause the AudioTrack for the duration of a silent idle (user pause,
+     * or the idle backstop) so the audio HAL can sleep, then re-warm it
+     * when there is something to render again. Event-driven: the worker
+     * waits on [lock] and is woken by [play], [resume], [updateConfig] and
+     * [teardown]; the timed wait is only a safety net against a lost
+     * wakeup. Exits when the session tears down, a schedule starts
+     * playing, or a noise bed becomes audible.
      */
-    private fun idleWhilePaused(track: AudioTrack) {
+    private fun parkTrack(track: AudioTrack) {
         try { track.pause() } catch (_: IllegalStateException) { return }
-        while (sessionRunning && _state.value == State.PAUSED &&
-            !synchronized(lock) { noiseAudible(curConfig) }
-        ) {
-            try { Thread.sleep(50) } catch (_: InterruptedException) { return }
+        synchronized(lock) {
+            while (sessionRunning && _state.value != State.PLAYING &&
+                !noiseAudible(curConfig)
+            ) {
+                try { lock.wait(1_000) } catch (_: InterruptedException) { return }
+            }
         }
         if (!sessionRunning) return
         try { track.play() } catch (_: IllegalStateException) { return }

@@ -245,6 +245,16 @@ class SessionOrchestrator(
             } catch (t: Throwable) {
                 Log.e(TAG, "start FATAL uncaught", t)
                 setStateIfCurrent(epoch, RunnerState.STOPPED)
+                // The loop is dead, so nothing else will ever stop the audio
+                // side of this session: without this, the engine's worker
+                // keeps its track alive forever (streaming silence, burning
+                // battery) with no session and no notification attached.
+                // Guarded by the epoch so a late-running handler can't tear
+                // down a newer session's engine.
+                if (synchronized(stateLock) { epoch == sessionEpoch }) {
+                    engine.stop()
+                    tts.stop()
+                }
             }
         }
     }
